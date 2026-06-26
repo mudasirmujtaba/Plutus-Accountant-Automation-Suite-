@@ -35,3 +35,7 @@ desktop.ini
 
 # ── Claude Code internal ──────────────────────────────────────────────────────
 .claude/
+
+# ── Internal docs ─────────────────────────────────────────────────────────────
+Project Guidelines/
+CLIENT_GUIDE.md
