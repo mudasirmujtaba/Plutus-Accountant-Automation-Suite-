@@ -1,0 +1,37 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+
+# ── Python ────────────────────────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# ── Generated / runtime files ─────────────────────────────────────────────────
+output/
+uploads/
+
+# ── Client data (bank statements & financial workbook) ────────────────────────
+Samples/*.csv
+Samples/*.pdf
+Samples/*.xlsx
+
+# ── Frontend build ────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── OS junk ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Claude Code internal ──────────────────────────────────────────────────────
+.claude/

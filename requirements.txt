@@ -1,0 +1,11 @@
+# Core pipeline
+pandas
+pdfplumber
+openpyxl
+anthropic
+python-dotenv
+
+# Backend API
+fastapi
+uvicorn[standard]
+python-multipart
