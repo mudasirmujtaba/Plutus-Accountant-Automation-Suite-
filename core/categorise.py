@@ -97,8 +97,9 @@ def _batch_classify(transactions: list[dict]) -> list[str]:
     items = []
     for t in transactions:
         direction = 'CREDIT' if t['money_in'] > 0 else 'DEBIT'
+        hint = t.get('csv_category', '') or ''
         items.append(
-            f"desc: {t['description']} | subcategory: {t.get('subcategory', '')} | {direction}"
+            f"desc: {t['description']} | type: {t.get('subcategory', '')} | hint: {hint} | {direction}"
         )
 
     user_msg = 'Categorise these transactions:\n' + '\n'.join(
@@ -118,10 +119,17 @@ def _batch_classify(transactions: list[dict]) -> list[str]:
     if not match:
         raise ValueError(f"Claude returned unexpected output: {text!r}")
     categories = json.loads(match.group())
-    if len(categories) != len(transactions):
-        raise ValueError(
-            f"Expected {len(transactions)} categories, got {len(categories)}"
-        )
+
+    n = len(transactions)
+    if len(categories) > n:
+        # Claude returned extra items — trim to expected length
+        print(f"  [categorise] Warning: Claude returned {len(categories)} categories for {n} transactions — trimming.")
+        categories = categories[:n]
+    elif len(categories) < n:
+        # Claude returned too few — pad missing ones with Sundry
+        print(f"  [categorise] Warning: Claude returned {len(categories)} categories for {n} transactions — padding with Sundry.")
+        categories += ['Sundry'] * (n - len(categories))
+
     return categories
 
 

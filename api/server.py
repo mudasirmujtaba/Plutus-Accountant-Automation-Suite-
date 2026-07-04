@@ -1,9 +1,10 @@
 """Plutus Milestone 1 – FastAPI backend.
 
 Endpoints:
-  POST /api/upload          – upload CSV/PDF, starts background job, returns job_id
+  POST /api/upload          – upload bank statement + template, starts background job
   GET  /api/progress/{id}   – poll job status
   GET  /api/download/{id}   – download processed Excel when status == 'done'
+  GET  /api/health          – health check
 """
 
 import sys
@@ -18,20 +19,17 @@ from fastapi.responses import FileResponse
 
 load_dotenv()
 
-# Make root importable (api/ lives one level under project root)
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from main import _infer_year  # noqa: E402
 
-TEMPLATE   = ROOT / 'Samples' / 'Bank summarised Behesta v1 2025.xlsx'
 OUTPUT_DIR = ROOT / 'output'
 UPLOAD_DIR = ROOT / 'uploads'
 
 OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# In-memory job store  {job_id: {...}}
 JOBS: dict[str, dict] = {}
 
 app = FastAPI(title='Plutus Accountant API')
@@ -46,10 +44,9 @@ app.add_middleware(
 
 # ── Background worker ─────────────────────────────────────────────────────────
 
-def _run_pipeline(job_id: str, file_path: Path, original_name: str) -> None:
+def _run_pipeline(job_id: str, file_path: Path, original_name: str, template_path: Path) -> None:
     job = JOBS[job_id]
     try:
-        # Step 1 – parse
         _update(job, step='parsing', progress=10, message='Parsing bank statement…')
         suffix = file_path.suffix.lower()
         if suffix == '.csv':
@@ -69,21 +66,17 @@ def _run_pipeline(job_id: str, file_path: Path, original_name: str) -> None:
         if n == 0:
             raise ValueError('No transactions found in the uploaded file.')
 
-        # Step 2 – categorise
         _update(job, step='categorising', progress=40,
                 message=f'Parsed {n} transactions. Categorising with AI…')
         from core.categorise import categorise
         categories = categorise(transactions)
 
-        # Step 3 – write Excel
-        _update(job, step='writing', progress=75,
-                message=f'Categorised. Writing to Excel…')
+        _update(job, step='writing', progress=75, message='Categorised. Writing to Excel…')
         from core.excel_writer import write_workbook
         stem = Path(original_name).stem
         output_path = OUTPUT_DIR / f"{job_id}_{stem}_processed.xlsx"
-        write_workbook(transactions, categories, TEMPLATE, output_path)
+        write_workbook(transactions, categories, template_path, output_path)
 
-        # Done
         from collections import Counter
         cat_summary = dict(Counter(categories).most_common(5))
         _update(job, step='done', progress=100, status='done',
@@ -97,35 +90,50 @@ def _run_pipeline(job_id: str, file_path: Path, original_name: str) -> None:
         JOBS[job_id].update({'status': 'error', 'progress': 0,
                              'message': str(exc), 'step': 'error'})
     finally:
-        # Clean up upload file
         try:
             file_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            template_path.unlink(missing_ok=True)
         except Exception:
             pass
 
 
 def _update(job: dict, **kwargs) -> None:
     job.update(kwargs)
-    if 'status' not in kwargs:
-        job.setdefault('status', 'processing')
+    job.setdefault('status', 'processing')
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post('/api/upload')
-async def upload(file: UploadFile = File(...)):
+async def upload(
+    file: UploadFile = File(..., description='Bank statement (CSV, PDF, XLSX)'),
+    template: UploadFile = File(..., description='Excel template workbook (XLSX)'),
+):
     name = file.filename or ''
     ext  = Path(name).suffix.lower()
     if ext not in ('.csv', '.pdf', '.xlsx'):
         raise HTTPException(status_code=400,
-                            detail='Only CSV, PDF and XLSX files are supported.')
+                            detail='Bank statement must be CSV, PDF or XLSX.')
 
-    job_id     = str(uuid.uuid4())
-    saved_path = UPLOAD_DIR / f"{job_id}{ext}"
-    content    = await file.read()
+    tmpl_name = template.filename or ''
+    if not tmpl_name.lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400,
+                            detail='Template must be an XLSX file.')
 
+    job_id        = str(uuid.uuid4())
+    saved_path    = UPLOAD_DIR / f"{job_id}_statement{ext}"
+    template_path = UPLOAD_DIR / f"{job_id}_template.xlsx"
+
+    content = await file.read()
     with open(saved_path, 'wb') as fh:
         fh.write(content)
+
+    tmpl_content = await template.read()
+    with open(template_path, 'wb') as fh:
+        fh.write(tmpl_content)
 
     JOBS[job_id] = {
         'status':   'processing',
@@ -135,9 +143,11 @@ async def upload(file: UploadFile = File(...)):
         'filename': name,
     }
 
-    t = threading.Thread(target=_run_pipeline,
-                         args=(job_id, saved_path, name),
-                         daemon=True)
+    t = threading.Thread(
+        target=_run_pipeline,
+        args=(job_id, saved_path, name, template_path),
+        daemon=True,
+    )
     t.start()
 
     return {'job_id': job_id, 'filename': name}

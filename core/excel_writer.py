@@ -1,23 +1,7 @@
-"""Excel writer for Milestone 1.
+"""Dynamic Excel writer for Milestone 1.
 
-Loads the master template (Bank_summarised_Behesta_v1_2025.xlsx), appends
-new transaction rows to RAW (2) in the exact A-M column layout with live
-Excel formulas, then rebuilds the Analysis 24 Raw (2) pivot using SUMIFS.
-
-Column layout of RAW (2) / RAW (3):
-    A  No            – sequential integer
-    B  SA            – FY label e.g. 'FY24'
-    C  ACC           – '24/25'
-    D  Date          – Excel date (datetime)
-    E  Subcategory   – bank's own type
-    F  Memo          – cleaned description
-    G  Paid in       – positive credit amount
-    H  Paid out      – positive debit amount
-    I  Balance       – from statement; blank if not available
-    J  NET           – formula =G{row}-H{row}
-    K  Balance UC    – formula =J{row} (first) or =K{prev}+J{row}
-    L  Check UC      – formula =I{row}-K{row} (only when I has a value)
-    M  UC Category   – Claude's category
+Works with any client template by reading column headers from the RAW sheet
+at runtime. Sheet names and column positions are auto-detected.
 """
 
 import re
@@ -31,257 +15,313 @@ from openpyxl.utils import get_column_letter
 from core.financial_year import get_fy
 
 
-# ── Category metadata (read from the existing Analysis tab) ──────────────────
-# PL/BS tag and presentation name for each category.
-# These are extracted from the real template and normalised to Title Case.
+# ── Sheet detection ───────────────────────────────────────────────────────────
 
-_DEFAULT_META: dict[str, tuple[str, str]] = {
-    'Accountancy':              ('BS', 'Accountancy'),
-    'Bank charges':             ('PL', 'Bank charges'),
-    'Car Insurance':            ('PL', 'Car Insurance'),
-    'Charging':                 ('PL', 'Charging'),
-    'Company Car':              ('PL', 'Company Car'),
-    'Directors salary':         ('PL', 'Directors salary'),
-    'DLA':                      ('BS', 'DLA'),
-    'Donation':                 ('PL', 'Donations'),
-    'Entertainment':            ('PL', 'Entertainment'),
-    'Equipment':                ('PL', 'Equipment'),
-    'Gym':                      ('PL', 'Benefits'),
-    'HMRC':                     ('BS', 'Corporation tax'),
-    'In/Out':                   ('PL', 'In/Out'),
-    'Income':                   ('PL', 'Income'),
-    'Insurance':                ('PL', 'Insurance'),
-    'Interest income':          ('PL', 'Interest income'),
-    'Investment':               ('BS', 'Investment'),
-    'Lunch':                    ('PL', 'Subiststence'),
-    'Mobile phone':             ('PL', 'Mobile'),
-    'Mother Salary':            ('PL', 'Wages'),
-    'Parking':                  ('PL', 'Travel'),
-    'Penalty fee':              ('BS', 'DLA'),
-    'Petrol':                   ('BS', 'DLA'),
-    'Postage':                  ('PL', 'Postage'),
-    'Professional':             ('PL', 'Professional'),
-    'Professional fees - College': ('PL', 'Professional'),
-    'Refund':                   ('PL', 'Subiststence'),
-    'Subscription':             ('PL', 'Subscription'),
-    'Sundry':                   ('PL', 'Subiststence'),
-    'Taxes for mother':         ('PL', 'Wages'),
-    'Taxi':                     ('PL', 'Travel'),
-    'Train':                    ('PL', 'Travel'),
-    'Travel':                   ('PL', 'Travel'),
-    'Unknown':                  ('BS', 'Unknown'),
-    # Legacy entries present in template
-    'Lunch?':                   ('PL', 'Subiststence'),
-    'Professional ':            ('PL', 'Professional'),
-}
+def _detect_sheet(wb: openpyxl.Workbook, keyword: str) -> str:
+    """Return first sheet name containing keyword (case-insensitive)."""
+    kw = keyword.lower()
+    for name in wb.sheetnames:
+        if kw in name.lower():
+            return name
+    raise KeyError(f"No sheet containing '{keyword}' found in {wb.sheetnames}")
 
 
-def _read_analysis_meta(wb: openpyxl.Workbook) -> dict[str, tuple[str, str]]:
-    """Read PL/BS tags and presentation names from the existing Analysis sheet."""
-    meta = {}
-    ws = wb['Analysis 24 Raw (2)']
-    # Headers are in row 4; data starts row 5; categories are in column A.
-    # We need to find which column holds PL/BS and which holds presentation name.
-    # In the existing template: after the year columns (B, C, D) comes E=PL/BS, F=presentation.
-    # We detect year-column count by scanning row 4 for '##/##' patterns.
-    header_row = list(ws.iter_rows(min_row=4, max_row=4, values_only=True))[0]
-    year_col_count = 0
-    for val in header_row[1:]:  # skip column A
-        if val and re.match(r'\d{2}/\d{2}', str(val)):
-            year_col_count += 1
-        else:
-            break
+# ── Column index helpers ──────────────────────────────────────────────────────
 
-    pl_bs_col = 1 + year_col_count + 1   # 1-indexed (A=1)
-    pres_col  = pl_bs_col + 1
-
-    for row in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
-        cat = row[0]
-        if not cat or str(cat).strip().lower() in ('grand total', ''):
-            continue
-        pl_bs = row[pl_bs_col - 1] if len(row) >= pl_bs_col else None
-        pres  = row[pres_col - 1]  if len(row) >= pres_col  else None
-        if cat and pl_bs:
-            meta[str(cat).strip()] = (str(pl_bs).strip(), str(pres).strip() if pres else str(cat).strip())
-
-    # Merge with defaults for any missing entries
-    for k, v in _DEFAULT_META.items():
-        if k not in meta:
-            meta[k] = v
-
-    return meta
+def _read_headers(ws) -> dict:
+    """Return {header_stripped_lower: 1-based_col_index} for the first row."""
+    row1 = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+    return {str(v).strip().lower(): i + 1 for i, v in enumerate(row1) if v is not None}
 
 
-def _get_all_acc_years(wb: openpyxl.Workbook) -> list[str]:
-    """Return sorted list of unique ACC (##/##) values across both RAW sheets."""
-    years = set()
-    for sheet_name in ('RAW (2)', 'RAW (3)'):
-        try:
-            ws = wb[sheet_name]
-        except KeyError:
-            continue
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=3, max_col=3, values_only=True):
-            val = row[0]
-            if val and re.match(r'\d{2}/\d{2}', str(val)):
-                years.add(str(val))
-    return sorted(years)
+def _col(hdrs: dict, *names: str):
+    """Return 1-based col index for the first matching header name, or None."""
+    for n in names:
+        idx = hdrs.get(n.lower())
+        if idx is not None:
+            return idx
+    return None
 
 
-def _rebuild_analysis(wb: openpyxl.Workbook, category_meta: dict[str, tuple[str, str]]) -> None:
-    """Rebuild the Analysis 24 Raw (2) sheet using SUMIFS formulas."""
-    ws = wb['Analysis 24 Raw (2)']
-    ws.delete_rows(1, ws.max_row)   # clear everything
+def _detect_year_col_format(ws, col_idx: int) -> str:
+    """Detect the format of a year column from existing data values.
 
-    acc_years = _get_all_acc_years(wb)
+    Returns one of:
+      'sa_range'   "SA24/25"
+      'sa_dotted'  "SA23.24"
+      'sa_short'   "SA24"
+      'fy_label'   "FY24"
+      'acc_range'  "24/25"
+      'year_num'   "2025"
+    """
+    for row in ws.iter_rows(min_row=2, max_row=min(ws.max_row, 15), values_only=True):
+        val = row[col_idx - 1] if len(row) >= col_idx else None
+        if val:
+            s = str(val).strip()
+            if re.match(r'^SA\d{2}/\d{2}$', s):     return 'sa_range'
+            if re.match(r'^SA\d{2}\.\d{2}$', s):    return 'sa_dotted'
+            if re.match(r'^SA\d{2}$', s):            return 'sa_short'
+            if re.match(r'^FY\d{2}$', s, re.I):     return 'fy_label'
+            if re.match(r'^\d{2}/\d{2}$', s):       return 'acc_range'
+            if re.match(r'^\d{4}$', s):              return 'year_num'
+    return 'fy_label'  # default
 
-    # Column layout:
-    #   A  = Row Labels (category name)
-    #   B+ = one column per FY year
-    #   next = PL/BS tag
-    #   next = presentation name
+
+def _format_year(sa: str, acc: str, fmt: str):
+    """Format a year value for a specific column format.
+
+    sa  = "FY25"  (start-year label from get_fy)
+    acc = "25/26" (year range from get_fy)
+    """
+    acc_start = acc[:2]   # "25"
+    acc_end   = acc[3:]   # "26"
+    if fmt == 'sa_range':   return f"SA{acc}"
+    if fmt == 'sa_dotted':  return f"SA{acc_start}.{acc_end}"
+    if fmt == 'sa_short':   return f"SA{acc_end}"
+    if fmt == 'fy_label':   return sa
+    if fmt == 'acc_range':  return acc
+    if fmt == 'year_num':   return int(f"20{acc_end}")
+    return sa  # fallback
+
+
+# ── Analysis rebuild ──────────────────────────────────────────────────────────
+
+def _rebuild_analysis(
+    wb: openpyxl.Workbook,
+    raw_ws,
+    year_col: int,
+    net_col: int,
+    uc_col: int,
+    analysis_name: str,
+) -> None:
+    """Rebuild the Analysis sheet with SUMIFS formulas against the RAW sheet."""
+    raw_name     = raw_ws.title
+    year_letter  = get_column_letter(year_col)
+    net_letter   = get_column_letter(net_col)
+    uc_letter    = get_column_letter(uc_col)
+
+    # Collect unique year values (##/## range style OR FY## label style)
+    years: set = set()
+    for row in raw_ws.iter_rows(
+        min_row=2, max_row=raw_ws.max_row, min_col=year_col, max_col=year_col, values_only=True
+    ):
+        val = row[0]
+        if val:
+            s = str(val).strip()
+            if re.match(r'^\d{2}/\d{2}$', s) or re.match(r'^FY\d{2}$', s, re.I):
+                years.add(s)
+    acc_years = sorted(years)
+
+    # Collect unique category values from UC Category column
+    cats: set = set()
+    for row in raw_ws.iter_rows(
+        min_row=2, max_row=raw_ws.max_row, min_col=uc_col, max_col=uc_col, values_only=True
+    ):
+        val = row[0]
+        if val and str(val).strip():
+            cats.add(str(val).strip())
+
+    ws_a = wb[analysis_name]
+    ws_a.delete_rows(1, ws_a.max_row)
+
     n_years = len(acc_years)
-    plbs_col = n_years + 2    # 1-indexed
-    pres_col = n_years + 3
 
     # Row 3: title
-    ws.cell(row=3, column=1, value='Sum of NET')
-    ws.cell(row=3, column=2, value='Column Labels')
+    ws_a.cell(row=3, column=1, value='Sum of NET')
+    ws_a.cell(row=3, column=2, value='Column Labels')
 
-    # Row 4: header
-    ws.cell(row=4, column=1, value='Row Labels')
+    # Row 4: headers
+    ws_a.cell(row=4, column=1, value='Row Labels')
     for j, yr in enumerate(acc_years):
-        ws.cell(row=4, column=2 + j, value=yr)
-    ws.cell(row=4, column=plbs_col, value='PL/BS')
-    ws.cell(row=4, column=pres_col, value='Presentation name')
+        ws_a.cell(row=4, column=2 + j, value=yr)
 
-    # Collect ordered categories (use keys from meta, preserving existing Analysis order)
-    existing_order = []
-    seen = set()
-    # First: categories from _DEFAULT_META in their natural order
-    for cat in _DEFAULT_META:
-        norm = cat.strip()
-        if norm and norm.lower() != 'grand total' and norm not in seen:
-            existing_order.append(norm)
-            seen.add(norm)
-    # Then: any categories from meta not already listed
-    for cat in category_meta:
-        norm = cat.strip()
-        if norm and norm.lower() != 'grand total' and norm not in seen:
-            existing_order.append(norm)
-            seen.add(norm)
-
-    data_row_start = 5
-    for r_offset, cat in enumerate(existing_order):
-        row = data_row_start + r_offset
-        meta = category_meta.get(cat, _DEFAULT_META.get(cat, ('PL', cat)))
-        ws.cell(row=row, column=1, value=cat)
-        ws.cell(row=row, column=plbs_col, value=meta[0])
-        ws.cell(row=row, column=pres_col, value=meta[1])
-
+    # Rows 5+: one per category
+    for r_off, cat in enumerate(sorted(cats)):
+        r = 5 + r_off
+        ws_a.cell(row=r, column=1, value=cat)
         for j, yr in enumerate(acc_years):
-            col = 2 + j
-            yr_cell = f"${get_column_letter(col)}$4"  # e.g. $B$4
-            # SUMIFS across both RAW sheets
+            yr_ref = f"${get_column_letter(2 + j)}$4"
             formula = (
-                f"=SUMIFS('RAW (2)'!$J:$J,'RAW (2)'!$C:$C,{yr_cell},'RAW (2)'!$M:$M,$A{row})"
-                f"+SUMIFS('RAW (3)'!$J:$J,'RAW (3)'!$C:$C,{yr_cell},'RAW (3)'!$M:$M,$A{row})"
+                f"=SUMIFS('{raw_name}'!${net_letter}:${net_letter},"
+                f"'{raw_name}'!${year_letter}:${year_letter},{yr_ref},"
+                f"'{raw_name}'!${uc_letter}:${uc_letter},$A{r})"
             )
-            ws.cell(row=row, column=col, value=formula)
+            ws_a.cell(row=r, column=2 + j, value=formula)
 
     # Grand Total row
-    total_row = data_row_start + len(existing_order)
-    ws.cell(row=total_row, column=1, value='Grand Total')
+    total_r = 5 + len(cats)
+    ws_a.cell(row=total_r, column=1, value='Grand Total')
     for j in range(n_years):
-        col = 2 + j
-        col_letter = get_column_letter(col)
-        formula = f"=SUM({col_letter}{data_row_start}:{col_letter}{total_row - 1})"
-        ws.cell(row=total_row, column=col, value=formula)
+        col_letter = get_column_letter(2 + j)
+        ws_a.cell(row=total_r, column=2 + j,
+                  value=f"=SUM({col_letter}5:{col_letter}{total_r - 1})")
 
+
+# ── Main entry point ──────────────────────────────────────────────────────────
 
 def write_workbook(
-    transactions: list[dict],
-    categories: list[str],
+    transactions: list,
+    categories: list,
     template_path,
     output_path,
-    sheet_name: str = 'RAW (2)',
+    sheet_name: str = None,
 ) -> None:
-    """Append transactions to the template and save to output_path.
+    """Append transactions to template and save to output_path.
 
-    transactions – list of dicts from parse_csv / parse_pdf
-    categories   – list of category strings (same length as transactions)
-    template_path – path to Bank_summarised_Behesta_v1_2025.xlsx
-    output_path   – where to write the result
-    sheet_name    – which RAW sheet to append to (default 'RAW (2)')
+    sheet_name – RAW sheet to use; auto-detected if None.
     """
     template_path = Path(template_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy template so we don't modify the original
     shutil.copy2(template_path, output_path)
-
     wb = openpyxl.load_workbook(output_path)
-    ws = wb[sheet_name]
 
-    # Find last existing row number and last sequence number
+    # ── Detect RAW sheet ──────────────────────────────────────────────────────
+    if sheet_name:
+        try:
+            ws = wb[sheet_name]
+        except KeyError:
+            ws = wb[_detect_sheet(wb, 'raw')]
+    else:
+        ws = wb[_detect_sheet(wb, 'raw')]
+
+    # ── Build column index from template headers ───────────────────────────────
+    hdrs = _read_headers(ws)
+
+    no_col    = _col(hdrs, 'No', '#')
+    sa_col    = _col(hdrs, 'SA')
+    acc_col   = _col(hdrs, 'ACC', 'AC')
+    date_col  = _col(hdrs, 'Date')
+    desc_col  = _col(hdrs, 'Counter Party', 'Description', 'Transaction description',
+                     'Details', 'Memo', 'Narrative')
+    ref_col   = _col(hdrs, 'Reference', 'Ref')
+    type_col  = _col(hdrs, 'Type', 'Transaction Type', 'Transaction type')
+    in_col    = _col(hdrs, 'Paid in', 'Paid In', 'IN', 'In', 'In (£)', 'In (GBP)')
+    out_col   = _col(hdrs, 'Paid out', 'Paid Out', 'OUT', 'Out', 'Out (£)', 'Out (GBP)')
+    amt_col   = _col(hdrs, 'Amount (GBP)', 'Amount (£)', 'Amount')
+    bal_col   = _col(hdrs, 'Balance', 'Balance (GBP)', 'Balance (£)')
+    net_col   = _col(hdrs, 'NET', 'Net')
+    buc_col   = _col(hdrs, 'Balance UC')
+    chk_col   = _col(hdrs, 'Check UC', 'Check')
+    csv_cat_col = _col(hdrs, 'Spending Category', 'Category name')
+    uc_col    = _col(hdrs, 'UC category', 'UC Category')
+
+    # Detect year column formats from existing data
+    sa_fmt  = _detect_year_col_format(ws, sa_col)  if sa_col  else None
+    acc_fmt = _detect_year_col_format(ws, acc_col) if acc_col else None
+    fy_col  = _col(hdrs, 'FY')
+    fy_fmt  = _detect_year_col_format(ws, fy_col)  if fy_col  else None
+
+    # Determine NET formula target and signed-amount column
+    # When in_col and out_col exist: net formula is written to net_col or amt_col (as fallback)
+    # When only amt_col: no formula — write static signed value
+    if net_col and in_col and out_col:
+        net_formula_col = net_col
+        signed_col = amt_col if (amt_col and amt_col != net_col) else None
+    elif not net_col and amt_col and in_col and out_col:
+        net_formula_col = amt_col
+        signed_col = None
+    elif amt_col and not in_col and not out_col:
+        net_formula_col = None
+        signed_col = amt_col
+    else:
+        net_formula_col = None
+        signed_col = None
+
+    # ── Find last row and highest sequence number ─────────────────────────────
     last_row = ws.max_row
     last_no = 0
-    for row in ws.iter_rows(min_row=2, max_row=last_row, min_col=1, max_col=1, values_only=True):
-        val = row[0]
-        if val is not None:
-            try:
-                last_no = max(last_no, int(val))
-            except (TypeError, ValueError):
-                pass
+    if no_col:
+        for row in ws.iter_rows(
+            min_row=2, max_row=last_row, min_col=no_col, max_col=no_col, values_only=True
+        ):
+            val = row[0]
+            if val is not None:
+                try:
+                    last_no = max(last_no, int(val))
+                except (TypeError, ValueError):
+                    pass
 
-    prev_k_row = last_row  # row number of the last K formula (for chaining)
+    # ── Write transaction rows ────────────────────────────────────────────────
+    def w(col, val):
+        if col:
+            ws.cell(row=r, column=col, value=val)
 
     for i, (txn, cat) in enumerate(zip(transactions, categories)):
-        new_row = last_row + 1 + i
-        seq_no = last_no + 1 + i
+        r = last_row + 1 + i
+        seq = last_no + 1 + i
 
         d = txn['date']
         if not isinstance(d, datetime):
             d = datetime(d.year, d.month, d.day)
 
         sa, acc = get_fy(d)
+        money_in  = txn['money_in']
+        money_out = txn['money_out']
+        balance   = txn.get('balance')
 
-        money_in  = txn['money_in']  if txn['money_in']  > 0 else None
-        money_out = txn['money_out'] if txn['money_out'] > 0 else None
-        balance   = txn['balance']
+        w(no_col,   seq)
+        if sa_col  and sa_fmt:  w(sa_col,  _format_year(sa, acc, sa_fmt))
+        if acc_col and acc_fmt: w(acc_col, _format_year(sa, acc, acc_fmt))
+        if fy_col  and fy_fmt:  w(fy_col,  _format_year(sa, acc, fy_fmt))
+        w(date_col, d)
+        w(desc_col, txn.get('description') or None)
+        w(ref_col,  txn.get('reference')   or None)
+        w(type_col, txn.get('subcategory') or None)
+        w(in_col,   money_in  if money_in  > 0 else None)
+        w(out_col,  money_out if money_out > 0 else None)
+        w(bal_col,  balance)
+        w(csv_cat_col, txn.get('csv_category') or None)
+        w(uc_col,   cat)
 
-        ws.cell(row=new_row, column=1,  value=seq_no)      # A: No
-        ws.cell(row=new_row, column=2,  value=sa)          # B: SA
-        ws.cell(row=new_row, column=3,  value=acc)         # C: ACC
-        ws.cell(row=new_row, column=4,  value=d)           # D: Date
-        ws.cell(row=new_row, column=5,  value=txn.get('subcategory', '') or None)  # E: Subcategory
-        ws.cell(row=new_row, column=6,  value=txn['description'] or None)           # F: Memo
-        ws.cell(row=new_row, column=7,  value=money_in)    # G: Paid in
-        ws.cell(row=new_row, column=8,  value=money_out)   # H: Paid out
-        ws.cell(row=new_row, column=9,  value=balance)     # I: Balance
+        # Signed amount column (e.g. Matthew Farris "Amount (GBP)")
+        if signed_col:
+            signed = money_in if money_in > 0 else (-money_out if money_out > 0 else None)
+            w(signed_col, signed)
 
-        # J: NET formula
-        ws.cell(row=new_row, column=10, value=f'=G{new_row}-H{new_row}')
+        # NET formula
+        if net_formula_col and in_col and out_col:
+            in_l  = get_column_letter(in_col)
+            out_l = get_column_letter(out_col)
+            w(net_formula_col, f'={in_l}{r}-{out_l}{r}')
 
-        # K: Balance UC formula (chain from previous K)
-        if new_row == last_row + 1 and last_row > 1:
-            ws.cell(row=new_row, column=11, value=f'=K{prev_k_row}+J{new_row}')
-        elif new_row == last_row + 1 and last_row == 1:
-            ws.cell(row=new_row, column=11, value=f'=J{new_row}')
-        else:
-            ws.cell(row=new_row, column=11, value=f'=K{new_row - 1}+J{new_row}')
+        # Balance UC formula chain
+        if buc_col and net_formula_col:
+            buc_l = get_column_letter(buc_col)
+            net_l = get_column_letter(net_formula_col)
+            if i == 0 and last_row > 1:
+                w(buc_col, f'={buc_l}{last_row}+{net_l}{r}')
+            elif i == 0:
+                w(buc_col, f'={net_l}{r}')
+            else:
+                w(buc_col, f'={buc_l}{r - 1}+{net_l}{r}')
 
-        # L: Check UC – only when balance is present
-        if balance is not None:
-            ws.cell(row=new_row, column=12, value=f'=I{new_row}-K{new_row}')
+        # Check UC formula (only when balance is present in the statement)
+        if chk_col and bal_col and buc_col and balance is not None:
+            bal_l = get_column_letter(bal_col)
+            buc_l = get_column_letter(buc_col)
+            w(chk_col, f'={bal_l}{r}-{buc_l}{r}')
 
-        # M: UC Category
-        ws.cell(row=new_row, column=13, value=cat)
+    # ── Rebuild Analysis pivot ────────────────────────────────────────────────
+    try:
+        analysis_name = _detect_sheet(wb, 'analysis')
+    except KeyError:
+        print("  [excel_writer] No Analysis sheet found — skipping pivot rebuild.")
+        wb.save(output_path)
+        print(f"  [excel_writer] Saved -> {output_path}")
+        return
 
-    # Rebuild Analysis pivot
-    print("  [excel_writer] Rebuilding Analysis 24 Raw (2) pivot...")
-    category_meta = _read_analysis_meta(wb)
-    _rebuild_analysis(wb, category_meta)
+    # Choose year-grouping column for Analysis SUMIFS.
+    # Prefer the column that has range-style values (24/25) since it's most distinct,
+    # but any year column works — SUMIFS just matches whatever value is in the header cell.
+    pivot_year_col = acc_col or fy_col or sa_col
+
+    if not pivot_year_col or not net_formula_col or not uc_col:
+        print("  [excel_writer] Missing year/net/category columns — skipping Analysis rebuild.")
+    else:
+        print(f"  [excel_writer] Rebuilding {analysis_name} pivot...")
+        _rebuild_analysis(wb, ws, pivot_year_col, net_formula_col, uc_col, analysis_name)
 
     wb.save(output_path)
-    print(f"  [excel_writer] Saved to {output_path}")
+    print(f"  [excel_writer] Saved -> {output_path}")
