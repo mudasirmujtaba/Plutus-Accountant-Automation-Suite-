@@ -1,26 +1,27 @@
-"""Parse a Barclays PDF bank statement.
+"""Parse a bank statement PDF.
 
-The Barclays statement has a text-based table:
-    Date | Description | Money out £ | Money in £ | Balance £
+Two-layer strategy:
+ 1. Barclays text-mode parser  – fast, handles Barclays multi-line descriptions.
+ 2. Generic table parser       – works for most other banks (HSBC, Lloyds,
+                                 NatWest, Halifax, Santander, etc.) whose
+                                 PDFs contain proper table cells.
 
-Key behaviours handled:
-- Dates appear once and carry forward to subsequent rows on the same day.
-- Descriptions can wrap to the next line (joined with a space).
-- Ref: lines are appended to the previous description.
-- Non-transaction lines are skipped (Start Balance, Balance brought/carried
-  forward, Total Payments/Receipts, page headers/footers, sidebar glances).
-- The running Balance column is used to fill column I.
-- Account number, sort code, IBAN are NEVER returned (privacy).
+If both layers return 0 transactions a ValueError is raised with a helpful
+message so the API returns a readable error to the user.
 
 Returns the same shape as parse_csv:
     {
         'date':        datetime.date,
         'description': str,
-        'subcategory': str,   # always '' – PDF has no subcategory field
+        'subcategory': str,
+        'reference':   str,
+        'csv_category': str,
         'money_in':    float,
         'money_out':   float,
         'balance':     float | None,
     }
+
+Privacy: account numbers, sort codes, IBANs are NEVER returned.
 """
 
 import re
@@ -30,19 +31,98 @@ from pathlib import Path
 import pdfplumber
 
 
-# Matches "6 Apr", "12 Apr", "1 May" at the start of a line
-_DATE_PREFIX = re.compile(
-    r'^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+(.*)',
+# ── Shared regex helpers ──────────────────────────────────────────────────────
+
+_MONTHS = r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+
+# "6 Apr", "12 Apr", "6 Apr 2025"
+_DATE_DMY_TEXT = re.compile(
+    rf'^(\d{{1,2}}\s+{_MONTHS}(?:\s+\d{{4}})?)\s+(.*)',
     re.IGNORECASE,
 )
 
-# Matches one or two decimal amounts at the end of a line
-# e.g. "... 5.50 15,676.83" or "... 375.00 15,983.59"
-_TWO_AMOUNTS = re.compile(r'^(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$')
-_ONE_AMOUNT = re.compile(r'^(.*?)\s+([\d,]+\.\d{2})\s*$')
+# "01/04/2025", "01-04-2025", "01.04.2025"
+_DATE_SLASH = re.compile(r'^(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})\s+(.*)')
 
-# Lines that are NOT transactions and should be skipped entirely
-_SKIP_RE = re.compile(
+# "2025-04-01"
+_DATE_ISO = re.compile(r'^(\d{4}-\d{2}-\d{2})\s+(.*)')
+
+_AMOUNT_RE   = re.compile(r'[\d,]+\.\d{2}')
+_TWO_AMOUNTS = re.compile(r'^(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$')
+_ONE_AMOUNT  = re.compile(r'^(.*?)\s+([\d,]+\.\d{2})\s*$')
+
+
+def _parse_amount(s: str) -> float:
+    return float(str(s).replace(',', '').replace('£', '').strip())
+
+
+def _parse_date_str(s: str, year_hint: int) -> 'datetime.date | None':
+    """Parse a date string in any common format."""
+    s = s.strip()
+    for fmt in ('%d %b %Y', '%d %b'):
+        try:
+            d = datetime.strptime(s, fmt)
+            if '%Y' not in fmt:
+                d = d.replace(year=year_hint)
+            return d.date()
+        except ValueError:
+            pass
+    for sep in ('/', '-', '.'):
+        for fmt in (f'%d{sep}%m{sep}%Y', f'%m{sep}%d{sep}%Y'):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
+    try:
+        return datetime.strptime(s, '%Y-%m-%d').date()
+    except ValueError:
+        pass
+    return None
+
+
+def _try_parse_amount_cell(val) -> float | None:
+    """Convert a table cell value to float, or None if not a number."""
+    if val is None:
+        return None
+    s = str(val).strip().replace(',', '').replace('£', '').replace('(', '-').replace(')', '')
+    if not s or s in ('-', '—', ''):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _infer_year(path: Path) -> int:
+    """Guess statement year from the filename (e.g. '2025', 'Apr25')."""
+    name = path.stem
+    m = re.search(r'20(\d{2})', name)
+    if m:
+        return int('20' + m.group(1))
+    m = re.search(r'\b(\d{2})\b', name)
+    if m:
+        yr = int(m.group(1))
+        return 2000 + yr if yr >= 20 else 2000 + yr
+    return datetime.now().year
+
+
+# ── Privacy filter ────────────────────────────────────────────────────────────
+
+_SENSITIVE_RE = re.compile(
+    r'\b\d{8}\b'           # 8-digit account number
+    r'|\b\d{2}-\d{2}-\d{2}\b'  # sort code XX-XX-XX
+    r'|IBAN\s*[:\s]+[A-Z]{2}\d{2}[A-Z0-9]+',
+    re.IGNORECASE,
+)
+
+
+def _scrub(text: str) -> str:
+    return _SENSITIVE_RE.sub('[REDACTED]', text)
+
+
+# ── Layer 1: Barclays text-mode parser ───────────────────────────────────────
+
+_BARCLAYS_SKIP = re.compile(
     r'balance brought forward|bbaallaannccee|'
     r'start balance|'
     r'date\s+description\s+money|'
@@ -59,13 +139,11 @@ _SKIP_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Lines that mark the END of real transaction data on a page – flush and ignore rest
-_END_OF_TXNS_RE = re.compile(
+_BARCLAYS_END = re.compile(
     r'balance carried forward|total payments|total receipts|helpful information',
     re.IGNORECASE,
 )
 
-# Sidebar "at a glance" amounts that appear inline with page 1 transactions
 _SIDEBAR_SUFFIX = re.compile(
     r'\s+u\s+.*$'
     r'|\s+Money (?:in|out)\s+.*$'
@@ -75,195 +153,246 @@ _SIDEBAR_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
-# All decimal amounts within a line (for fallback extraction)
-_ALL_AMOUNTS_RE = re.compile(r'[\d,]+\.\d{2}')
 
-
-def _parse_amount(s: str) -> float:
-    return float(s.replace(',', ''))
-
-
-def _extract_amounts_fallback(text: str):
-    """Scan text for the rightmost two decimal numbers → (desc, amount, balance).
-
-    Used when a line has trailing non-decimal junk (e.g. sidebar phrases)
-    that prevent the main regexes from matching.
-    Returns None if fewer than 2 decimal numbers found.
-    """
-    matches = list(_ALL_AMOUNTS_RE.finditer(text))
-    if len(matches) < 2:
-        return None
-    bal_m = matches[-1]
-    amt_m = matches[-2]
-    balance = _parse_amount(bal_m.group())
-    amount  = _parse_amount(amt_m.group())
-    desc = text[:amt_m.start()].strip()
-    return desc, amount, balance
-
-
-def _parse_date(s: str) -> datetime.date:
-    for fmt in ('%d %b %Y', '%d %b'):
-        try:
-            d = datetime.strptime(s, fmt)
-            if fmt == '%d %b':
-                d = d.replace(year=datetime.now().year)
-            return d.date()
-        except ValueError:
-            pass
-    raise ValueError(f"Cannot parse date: {s!r}")
-
-
-def parse_pdf(path, year_hint: int = None) -> list[dict]:
-    """Parse the Barclays PDF at *path* and return transactions.
-
-    year_hint: the calendar year of the statement (for parsing bare dates
-    like '6 Apr' without a year). Defaults to the current year.
-    """
-    path = Path(path)
-    if year_hint is None:
-        year_hint = datetime.now().year
-
+def _parse_barclays(pdf, year_hint: int) -> list[dict]:
     transactions = []
     current_date = None
     prev_balance = None
-    # Accumulate the current in-progress transaction
-    pending = None  # dict or None
+    pending = None
 
-    def flush_pending():
+    def flush():
+        nonlocal pending
         if pending is not None:
             transactions.append(pending.copy())
+            pending = None
 
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if not text:
+    for page in pdf.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+        for raw_line in text.split('\n'):
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = _SIDEBAR_SUFFIX.sub('', line).strip()
+
+            if _BARCLAYS_END.search(line):
+                flush()
+                break
+
+            if _BARCLAYS_SKIP.search(line):
+                m = re.search(r'start balance\s+([\d,]+\.\d{2})', line, re.I)
+                if m:
+                    prev_balance = _parse_amount(m.group(1))
                 continue
 
-            lines = text.split('\n')
-            for raw_line in lines:
-                line = raw_line.strip()
-                if not line:
-                    continue
+            # Date prefix?
+            dm = _DATE_DMY_TEXT.match(line)
+            if dm:
+                date_str = dm.group(1).strip()
+                line = dm.group(2).strip()
+                # Inject year if not present
+                if not re.search(r'\d{4}', date_str):
+                    date_str = f"{date_str} {year_hint}"
+                d = _parse_date_str(date_str, year_hint)
+                if d:
+                    current_date = d
 
-                # Strip sidebar clutter (page 1 "at a glance" column)
-                line = _SIDEBAR_SUFFIX.sub('', line).strip()
+            m2 = _TWO_AMOUNTS.match(line)
+            m1 = _ONE_AMOUNT.match(line) if not m2 else None
 
-                # End-of-transactions marker: flush pending and skip rest of page
-                if _END_OF_TXNS_RE.search(line):
-                    flush_pending()
-                    pending = None
-                    break  # stop processing this page's lines
-
-                # Skip non-transaction boilerplate
-                if _SKIP_RE.search(line):
-                    # Special case: extract start balance for tracking
-                    m = re.search(r'start balance\s+([\d,]+\.\d{2})', line, re.I)
-                    if m:
-                        prev_balance = _parse_amount(m.group(1))
-                    continue
-
-                # Try to detect a date prefix: "8 Apr Some description 5.50 12345.67"
-                date_match = _DATE_PREFIX.match(line)
-                if date_match:
-                    date_str = date_match.group(1).strip()
-                    rest = date_match.group(2).strip()
-                    # Parse the date, inject year_hint
-                    try:
-                        current_date = datetime.strptime(
-                            f"{date_str} {year_hint}", '%d %b %Y'
-                        ).date()
-                    except ValueError:
-                        pass
-                    line = rest  # process the remainder of the line
-
-                # Check if the line (or remainder) has transaction amounts
-                m2 = _TWO_AMOUNTS.match(line)
-                m1 = _ONE_AMOUNT.match(line) if not m2 else None
-
-                if m2:
-                    # description + amount + balance
-                    desc_part = m2.group(1).strip()
-                    balance_str = m2.group(3)
-                    flush_pending()
-                    balance = _parse_amount(balance_str)
-                    delta = balance - prev_balance if prev_balance is not None else None
-                    if delta is not None:
-                        money_in = round(delta, 2) if delta > 0.001 else 0.0
-                        money_out = round(-delta, 2) if delta < -0.001 else 0.0
-                    else:
-                        amt = _parse_amount(m2.group(2))
-                        money_in = 0.0
-                        money_out = amt
-                    prev_balance = balance
-                    pending = {
-                        'date': current_date,
-                        'description': desc_part,
-                        'subcategory': '',
-                        'money_in': money_in,
-                        'money_out': money_out,
-                        'balance': balance,
-                    }
-
-                elif m1:
-                    desc_part = m1.group(1).strip()
-                    balance_str = m1.group(2)
-                    if not desc_part:
-                        prev_balance = _parse_amount(balance_str)
-                        continue
-                    flush_pending()
-                    balance = _parse_amount(balance_str)
-                    delta = balance - prev_balance if prev_balance is not None else None
-                    if delta is not None:
-                        money_in = round(delta, 2) if delta > 0.001 else 0.0
-                        money_out = round(-delta, 2) if delta < -0.001 else 0.0
-                    else:
-                        money_in = 0.0
-                        money_out = 0.0
-                    prev_balance = balance
-                    pending = {
-                        'date': current_date,
-                        'description': desc_part,
-                        'subcategory': '',
-                        'money_in': money_in,
-                        'money_out': money_out,
-                        'balance': balance,
-                    }
-
+            if m2:
+                desc_part = m2.group(1).strip()
+                balance = _parse_amount(m2.group(3))
+                delta = balance - prev_balance if prev_balance is not None else None
+                if delta is not None:
+                    money_in  = round(delta, 2)  if delta >  0.001 else 0.0
+                    money_out = round(-delta, 2) if delta < -0.001 else 0.0
                 else:
-                    # No clean match – try fallback (handles sidebar junk after amounts)
-                    fb = _extract_amounts_fallback(line)
-                    if fb is not None:
-                        desc_part, _amt, balance = fb
-                        flush_pending()
-                        delta = balance - prev_balance if prev_balance is not None else None
-                        if delta is not None:
-                            money_in = round(delta, 2) if delta > 0.001 else 0.0
-                            money_out = round(-delta, 2) if delta < -0.001 else 0.0
-                        else:
-                            money_in = 0.0
-                            money_out = _amt
-                        prev_balance = balance
-                        pending = {
-                            'date': current_date,
-                            'description': desc_part,
-                            'subcategory': '',
-                            'money_in': money_in,
-                            'money_out': money_out,
-                            'balance': balance,
-                        }
+                    money_out = _parse_amount(m2.group(2))
+                    money_in = 0.0
+                prev_balance = balance
+                flush()
+                pending = {
+                    'date': current_date, 'description': _scrub(desc_part),
+                    'subcategory': '', 'reference': '', 'csv_category': '',
+                    'money_in': money_in, 'money_out': money_out, 'balance': balance,
+                }
+            elif m1:
+                desc_part = m1.group(1).strip()
+                if not desc_part:
+                    prev_balance = _parse_amount(m1.group(2))
+                    continue
+                balance = _parse_amount(m1.group(2))
+                delta = balance - prev_balance if prev_balance is not None else None
+                if delta is not None:
+                    money_in  = round(delta, 2)  if delta >  0.001 else 0.0
+                    money_out = round(-delta, 2) if delta < -0.001 else 0.0
+                else:
+                    money_in = money_out = 0.0
+                prev_balance = balance
+                flush()
+                pending = {
+                    'date': current_date, 'description': _scrub(desc_part),
+                    'subcategory': '', 'reference': '', 'csv_category': '',
+                    'money_in': money_in, 'money_out': money_out, 'balance': balance,
+                }
+            else:
+                # Fallback: find rightmost two decimal amounts
+                matches = list(_AMOUNT_RE.finditer(line))
+                if len(matches) >= 2:
+                    balance = _parse_amount(matches[-1].group())
+                    amt     = _parse_amount(matches[-2].group())
+                    desc_part = line[:matches[-2].start()].strip()
+                    delta = balance - prev_balance if prev_balance is not None else None
+                    if delta is not None:
+                        money_in  = round(delta, 2)  if delta >  0.001 else 0.0
+                        money_out = round(-delta, 2) if delta < -0.001 else 0.0
                     else:
-                        # Pure continuation of previous description
-                        if pending is not None and line:
-                            pending['description'] = (
-                                pending['description'] + ' ' + line
-                            ).strip()
+                        money_in = 0.0; money_out = amt
+                    prev_balance = balance
+                    flush()
+                    pending = {
+                        'date': current_date, 'description': _scrub(desc_part),
+                        'subcategory': '', 'reference': '', 'csv_category': '',
+                        'money_in': money_in, 'money_out': money_out, 'balance': balance,
+                    }
+                elif pending is not None and line:
+                    pending['description'] = (pending['description'] + ' ' + line).strip()
 
-    flush_pending()
-
-    # Remove any rows with no date or zero amounts that crept through
-    transactions = [
+    flush()
+    return [
         t for t in transactions
         if t['date'] is not None and (t['money_in'] > 0 or t['money_out'] > 0)
     ]
 
+
+# ── Layer 2: Generic table parser ────────────────────────────────────────────
+
+# Column header patterns for common banks
+_COL_DATE  = re.compile(r'^date$', re.I)
+_COL_DESC  = re.compile(r'description|details|narrative|merchant|payee|party', re.I)
+_COL_IN    = re.compile(r'paid.?in|credit|money.?in|deposits?|receipts?', re.I)
+_COL_OUT   = re.compile(r'paid.?out|debit|money.?out|withdrawals?|payments?', re.I)
+_COL_AMT   = re.compile(r'^amount$', re.I)
+_COL_BAL   = re.compile(r'^balance', re.I)
+_COL_REF   = re.compile(r'reference|ref$', re.I)
+_COL_TYPE  = re.compile(r'^type$|transaction.?type', re.I)
+
+
+def _match_col(headers: list[str], pattern: re.Pattern) -> int | None:
+    for i, h in enumerate(headers):
+        if h and pattern.search(str(h).strip()):
+            return i
+    return None
+
+
+def _parse_generic_table(pdf, year_hint: int) -> list[dict]:
+    """Extract transactions from any PDF that renders a clear table."""
+    transactions = []
+
+    for page in pdf.pages:
+        tables = page.extract_tables()
+        for table in tables:
+            if not table or len(table) < 2:
+                continue
+
+            # First row is usually the header
+            headers = [str(c or '').strip() for c in table[0]]
+            i_date = _match_col(headers, _COL_DATE)
+            i_desc = _match_col(headers, _COL_DESC)
+            i_in   = _match_col(headers, _COL_IN)
+            i_out  = _match_col(headers, _COL_OUT)
+            i_amt  = _match_col(headers, _COL_AMT)
+            i_bal  = _match_col(headers, _COL_BAL)
+            i_ref  = _match_col(headers, _COL_REF)
+            i_type = _match_col(headers, _COL_TYPE)
+
+            if i_date is None or i_desc is None:
+                continue  # not a transaction table
+            if i_in is None and i_out is None and i_amt is None:
+                continue
+
+            for row in table[1:]:
+                if not row or all(c is None or str(c).strip() == '' for c in row):
+                    continue
+
+                def cell(idx):
+                    if idx is None or idx >= len(row):
+                        return None
+                    return row[idx]
+
+                date_val = cell(i_date)
+                if not date_val or not str(date_val).strip():
+                    continue
+                d = _parse_date_str(str(date_val).strip(), year_hint)
+                if d is None:
+                    continue
+
+                desc = _scrub(str(cell(i_desc) or '').strip())
+
+                money_in  = _try_parse_amount_cell(cell(i_in))  or 0.0
+                money_out = _try_parse_amount_cell(cell(i_out)) or 0.0
+                balance   = _try_parse_amount_cell(cell(i_bal))
+
+                # Signed amount column (positive = in, negative = out)
+                if i_amt is not None and money_in == 0.0 and money_out == 0.0:
+                    raw_amt = _try_parse_amount_cell(cell(i_amt))
+                    if raw_amt is not None:
+                        if raw_amt >= 0:
+                            money_in = raw_amt
+                        else:
+                            money_out = -raw_amt
+
+                if money_in == 0.0 and money_out == 0.0:
+                    continue
+
+                ref  = _scrub(str(cell(i_ref)  or '').strip())
+                typ  = str(cell(i_type) or '').strip()
+
+                transactions.append({
+                    'date': d, 'description': desc,
+                    'subcategory': typ, 'reference': ref, 'csv_category': '',
+                    'money_in': round(money_in, 2),
+                    'money_out': round(money_out, 2),
+                    'balance': balance,
+                })
+
     return transactions
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+def parse_pdf(path, year_hint: int = None) -> list[dict]:
+    """Parse a bank statement PDF and return transactions.
+
+    Tries the Barclays text-mode parser first, then a generic table parser.
+    Raises ValueError if no transactions can be extracted.
+
+    year_hint: the calendar year (e.g. 2025). Auto-detected from the filename
+               if not supplied.
+    """
+    path = Path(path)
+    if year_hint is None:
+        year_hint = _infer_year(path)
+
+    with pdfplumber.open(path) as pdf:
+        # Layer 1: Barclays text-mode
+        txns = _parse_barclays(pdf, year_hint)
+        if txns:
+            print(f"  [parse_pdf] Barclays parser: {len(txns)} transactions from {path.name}")
+            return sorted(txns, key=lambda t: t['date'])
+
+        # Layer 2: Generic table extraction
+        txns = _parse_generic_table(pdf, year_hint)
+        if txns:
+            print(f"  [parse_pdf] Generic table parser: {len(txns)} transactions from {path.name}")
+            return sorted(txns, key=lambda t: t['date'])
+
+    raise ValueError(
+        f"Could not read any transactions from '{path.name}'. "
+        "Supported: Barclays text statements and any bank PDF with a clear table layout. "
+        "If your bank's PDF is not working, please export a CSV instead — "
+        "most online banking portals offer a 'Download transactions (CSV)' option. "
+        f"(Year hint: {year_hint})"
+    )
