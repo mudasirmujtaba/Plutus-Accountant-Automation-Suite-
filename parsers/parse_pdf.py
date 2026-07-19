@@ -94,15 +94,39 @@ def _try_parse_amount_cell(val) -> float | None:
 
 
 def _infer_year(path: Path) -> int:
-    """Guess statement year from the filename (e.g. '2025', 'Apr25')."""
+    """Guess statement year from the filename.
+
+    Handles patterns like:
+      'Statement 03-MAY-24 ...'  -> 2024
+      'May 24.csv'               -> 2024
+      'statement_2025_04.pdf'    -> 2025
+      'Apr25'                    -> 2025
+    """
     name = path.stem
+    # 4-digit year anywhere
     m = re.search(r'20(\d{2})', name)
     if m:
         return int('20' + m.group(1))
-    m = re.search(r'\b(\d{2})\b', name)
+    # DD-MMM-YY pattern (e.g. "03-MAY-24") — take the last 2-digit number after a month
+    m = re.search(
+        r'\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/\s](\d{2})',
+        name, re.IGNORECASE,
+    )
+    if m:
+        return 2000 + int(m.group(1))
+    # MMM-YY or MMM YY (e.g. "May 24", "Apr25")
+    m = re.search(
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/\s]?(\d{2})\b',
+        name, re.IGNORECASE,
+    )
+    if m:
+        return 2000 + int(m.group(1))
+    # Bare 2-digit year at end of filename (e.g. "statement_24")
+    m = re.search(r'[-_\s](\d{2})$', name)
     if m:
         yr = int(m.group(1))
-        return 2000 + yr if yr >= 20 else 2000 + yr
+        if 20 <= yr <= 99:
+            return 2000 + yr
     return datetime.now().year
 
 
