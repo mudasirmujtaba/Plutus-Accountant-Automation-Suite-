@@ -81,7 +81,9 @@ def main():
     # ── 2. Categorise ─────────────────────────────────────────────────────────
     print("[main] Categorising transactions...")
     from core.categorise import categorise
-    categories = categorise(transactions)
+    from core.excel_writer import extract_client_examples
+    client_examples = extract_client_examples(template_path, sheet_name=args.sheet)
+    categories = categorise(transactions, client_examples=client_examples)
     print(f"[main] Categories assigned.")
 
     # Print summary

@@ -29,10 +29,11 @@ def _parse_amount(raw: str):
         return None
 
 
-def _parse_date(raw: str):
+def _parse_datetime(raw: str):
+    """Return a datetime (keeps the time when present)."""
     for fmt in ('%d/%m/%Y %H:%M', '%d/%m/%Y', '%m/%d/%Y'):
         try:
-            return datetime.strptime(raw.strip(), fmt).date()
+            return datetime.strptime(raw.strip(), fmt)
         except ValueError:
             continue
     return None
@@ -98,15 +99,24 @@ def parse_csv(path) -> list[dict]:
     out_col = _find(headers, 'Paid out', 'Paid Out', 'OUT', 'Out', 'Out (£)', 'Out (GBP)', 'Debit')
     amt_col = _find(headers, 'Amount', 'Amount (GBP)', 'Amount (£)')
 
+    # Optional pass-through columns (some banks export these; some templates
+    # have matching columns — e.g. Shaifa's Timestamp/From/To/Status/Tag 1)
+    from_col   = _find(headers, 'From')
+    to_col     = _find(headers, 'To')
+    status_col = _find(headers, 'Status')
+    tag_col    = _find(headers, 'Tag 1', 'Tag')
+
     transactions = []
 
     for row in rows:
         date_raw = row.get(date_col, '').strip()
         if not date_raw:
             continue
-        d = _parse_date(date_raw)
-        if d is None:
+        dt = _parse_datetime(date_raw)
+        if dt is None:
             continue
+        d = dt.date()
+        timestamp = dt if (dt.hour or dt.minute or dt.second) else None
 
         description  = _clean(row.get(desc_col, ''))    if desc_col    else ''
         reference    = row.get(ref_col, '').strip()      if ref_col     else ''
@@ -140,6 +150,7 @@ def parse_csv(path) -> list[dict]:
 
         transactions.append({
             'date':         d,
+            'timestamp':    timestamp,
             'description':  description,
             'subcategory':  subcategory,
             'reference':    reference,
@@ -147,6 +158,10 @@ def parse_csv(path) -> list[dict]:
             'money_in':     money_in,
             'money_out':    money_out,
             'balance':      balance,
+            'from':         row.get(from_col, '').strip()   if from_col   else '',
+            'to':           row.get(to_col, '').strip()     if to_col     else '',
+            'status':       row.get(status_col, '').strip() if status_col else '',
+            'tag':          row.get(tag_col, '').strip()    if tag_col    else '',
         })
 
     # Sort ascending by date (some bank exports are newest-first)

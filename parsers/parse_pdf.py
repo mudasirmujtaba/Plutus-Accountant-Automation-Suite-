@@ -385,13 +385,105 @@ def _parse_generic_table(pdf, year_hint: int) -> list[dict]:
     return transactions
 
 
+# ── Layer 3: AI extraction (fallback for unknown layouts) ────────────────────
+
+def _parse_with_ai(pdf, year_hint: int) -> list[dict]:
+    """Ask Claude to extract transactions from statement text.
+
+    Privacy: only lines containing money amounts are sent (this excludes the
+    address block and account-details header), and account numbers, sort codes
+    and IBANs are scrubbed from every line before sending.
+    """
+    import json as _json
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key or api_key.startswith('sk-ant-...'):
+        return []
+
+    # Collect candidate transaction lines: only lines with an amount on them
+    lines = []
+    for page in pdf.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+        for raw in text.split('\n'):
+            line = raw.strip()
+            if line and _AMOUNT_RE.search(line):
+                lines.append(_scrub(line))
+    if not lines:
+        return []
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+    model = os.environ.get('CATEGORISE_MODEL', 'claude-sonnet-5')
+
+    system = (
+        "You extract transactions from UK bank statement text. "
+        "Return ONLY a JSON array; one object per real transaction:\n"
+        '{"date":"YYYY-MM-DD","description":"...","money_in":0.0,'
+        '"money_out":0.0,"balance":null_or_number}\n'
+        "Rules: skip totals, brought/carried-forward, headers and summaries. "
+        "Dates without a year belong to the statement year given by the user. "
+        "money_in for credits, money_out for debits (both positive numbers). "
+        "Keep the description as written, minus any '[REDACTED]' markers."
+    )
+
+    transactions = []
+    CHUNK = 120
+    for start in range(0, len(lines), CHUNK):
+        chunk = lines[start:start + CHUNK]
+        msg = (
+            f"Statement year: {year_hint}\n"
+            "Extract the transactions from these statement lines:\n"
+            + '\n'.join(chunk)
+        )
+        response = client.messages.create(
+            model=model, max_tokens=8000, system=system,
+            messages=[{'role': 'user', 'content': msg}],
+        )
+        text = ''.join(
+            b.text for b in response.content if getattr(b, 'type', '') == 'text'
+        ).strip()
+        m = re.search(r'\[.*\]', text, re.DOTALL)
+        if not m:
+            continue
+        try:
+            rows = _json.loads(m.group())
+        except _json.JSONDecodeError:
+            continue
+        for row in rows:
+            try:
+                d = datetime.strptime(str(row['date']), '%Y-%m-%d').date()
+                money_in  = float(row.get('money_in') or 0)
+                money_out = float(row.get('money_out') or 0)
+                bal = row.get('balance')
+                balance = float(bal) if bal is not None else None
+                desc = str(row.get('description') or '').replace('[REDACTED]', '').strip()
+                if money_in <= 0 and money_out <= 0:
+                    continue
+                transactions.append({
+                    'date': d, 'description': desc,
+                    'subcategory': '', 'reference': '', 'csv_category': '',
+                    'money_in': round(money_in, 2),
+                    'money_out': round(money_out, 2),
+                    'balance': balance,
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    return transactions
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def parse_pdf(path, year_hint: int = None) -> list[dict]:
     """Parse a bank statement PDF and return transactions.
 
-    Tries the Barclays text-mode parser first, then a generic table parser.
-    Raises ValueError if no transactions can be extracted.
+    Three layers: Barclays text parser -> generic table parser -> AI extraction.
+    Raises ValueError if none succeed.
 
     year_hint: the calendar year (e.g. 2025). Auto-detected from the filename
                if not supplied.
@@ -401,11 +493,15 @@ def parse_pdf(path, year_hint: int = None) -> list[dict]:
         year_hint = _infer_year(path)
 
     with pdfplumber.open(path) as pdf:
-        # Layer 1: Barclays text-mode
-        txns = _parse_barclays(pdf, year_hint)
-        if txns:
-            print(f"  [parse_pdf] Barclays parser: {len(txns)} transactions from {path.name}")
-            return sorted(txns, key=lambda t: t['date'])
+        # Layer 1: Barclays text-mode (only if it actually is a Barclays statement)
+        first_text = ' '.join(
+            (p.extract_text() or '') for p in pdf.pages[:2]
+        ).lower()
+        if 'barclays' in first_text:
+            txns = _parse_barclays(pdf, year_hint)
+            if txns:
+                print(f"  [parse_pdf] Barclays parser: {len(txns)} transactions from {path.name}")
+                return sorted(txns, key=lambda t: t['date'])
 
         # Layer 2: Generic table extraction
         txns = _parse_generic_table(pdf, year_hint)
@@ -413,10 +509,17 @@ def parse_pdf(path, year_hint: int = None) -> list[dict]:
             print(f"  [parse_pdf] Generic table parser: {len(txns)} transactions from {path.name}")
             return sorted(txns, key=lambda t: t['date'])
 
+        # Layer 3: AI extraction (unknown layout)
+        print(f"  [parse_pdf] Standard parsers found nothing — trying AI extraction...")
+        txns = _parse_with_ai(pdf, year_hint)
+        if txns:
+            print(f"  [parse_pdf] AI parser: {len(txns)} transactions from {path.name}")
+            return sorted(txns, key=lambda t: t['date'])
+
     raise ValueError(
         f"Could not read any transactions from '{path.name}'. "
-        "Supported: Barclays text statements and any bank PDF with a clear table layout. "
-        "If your bank's PDF is not working, please export a CSV instead — "
-        "most online banking portals offer a 'Download transactions (CSV)' option. "
+        "The PDF may be a scanned image (no selectable text). "
+        "Please export a CSV from your online banking instead — "
+        "most portals offer a 'Download transactions (CSV)' option. "
         f"(Year hint: {year_hint})"
     )

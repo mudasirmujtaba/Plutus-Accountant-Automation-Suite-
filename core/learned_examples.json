@@ -1,0 +1,702 @@
+{
+ "ASSOCIATION OF OPTOMETRISTS": {
+  "category": "AOP",
+  "seen": 10,
+  "example": "Association Of Optometrists"
+ },
+ "APCOA": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "APCOA"
+ },
+ "SPECSAVERS": {
+  "category": "Income",
+  "seen": 18,
+  "example": "Specsavers"
+ },
+ "WILKINSON LTD ZZ": {
+  "category": "Income",
+  "seen": 10,
+  "example": "WILKINSON LTD ZZ"
+ },
+ "RINGGO": {
+  "category": "Travel",
+  "seen": 12,
+  "example": "RingGo"
+ },
+ "TMCHARTERED LIMITED": {
+  "category": "Accountancy fee",
+  "seen": 5,
+  "example": "Tmchartered Limited"
+ },
+ "LOOKING GOOD OPTICIANS LIMITED": {
+  "category": "Income",
+  "seen": 13,
+  "example": "LOOKING GOOD OPTICIANS LIMITED T AS"
+ },
+ "LSER CONNECT ECOM": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Lser Connect Ecom"
+ },
+ "EDNEY EDNEY LIMI": {
+  "category": "Income",
+  "seen": 6,
+  "example": "Edney & Edney Limi"
+ },
+ "HARGREAVES LANSDOWN": {
+  "category": "SIPP",
+  "seen": 10,
+  "example": "Hargreaves Lansdown"
+ },
+ "AA": {
+  "category": "DLA",
+  "seen": 1,
+  "example": "The AA"
+ },
+ "SOUTHEASTERN RAILWAY": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Southeastern Railway"
+ },
+ "MAIDSTONE AND TUNBRIDG": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Maidstone And Tunbridg"
+ },
+ "TFL": {
+  "category": "Travel",
+  "seen": 2,
+  "example": "TfL"
+ },
+ "LS DECKHOUSE SEVENOAKS": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Ls Deckhouse Sevenoaks"
+ },
+ "TAYYABS": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Tayyabs"
+ },
+ "SABA PARK SERVICES UK": {
+  "category": "Travel",
+  "seen": 3,
+  "example": "Saba Park Services Uk"
+ },
+ "MARKS&SPENCER": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Marks&spencer"
+ },
+ "ORDERYOYO": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Orderyoyo"
+ },
+ "GOV UK": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Gov.uk"
+ },
+ "COLLEGE OF OPTOMETRISTS": {
+  "category": "College",
+  "seen": 2,
+  "example": "The College Of Optometrists"
+ },
+ "MAIDSTONE HOSPITAL": {
+  "category": "Parking",
+  "seen": 1,
+  "example": "Maidstone Hospital"
+ },
+ "NANDO": {
+  "category": "Trivial Benefits",
+  "seen": 1,
+  "example": "Nando's"
+ },
+ "HATTUSA": {
+  "category": "Trivial Benefits",
+  "seen": 1,
+  "example": "Hattusa"
+ },
+ "MAIDSTONE SMART MARKET": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Maidstone Smart Market"
+ },
+ "PARTNERSHIP OF DAY": {
+  "category": "Income",
+  "seen": 5,
+  "example": "PARTNERSHIP OF DAY"
+ },
+ "HMRC SHIPLEY": {
+  "category": "HMRC-PAYE",
+  "seen": 5,
+  "example": "HMRC Shipley"
+ },
+ "DISCLOSURE BARRING SERVICE": {
+  "category": "Professional fee",
+  "seen": 1,
+  "example": "Disclosure & Barring Service"
+ },
+ "MO ACCOUNTANT": {
+  "category": "Accountancy fee",
+  "seen": 1,
+  "example": "Mo Accountant"
+ },
+ "GENERAL OPTICAL COUNCIL": {
+  "category": "GOC",
+  "seen": 1,
+  "example": "General Optical Council"
+ },
+ "PAYPAL": {
+  "category": "Professional fee",
+  "seen": 2,
+  "example": "PayPal"
+ },
+ "ASSOCIATION OF OPT": {
+  "category": "Professional - AOP",
+  "seen": 1,
+  "example": "Direct Debit ASSOCIATION OF OPT 0000070593"
+ },
+ "AOP ASSOC OF OPTOMETRI": {
+  "category": "Professional - AOP",
+  "seen": 1,
+  "example": "Automated Credit AOP ASSOC OF OPTOMETRI"
+ },
+ "VISION EXPRESS UK RG": {
+  "category": "Income",
+  "seen": 6,
+  "example": "Automated Credit VISION EXPRESS UK RG50570002980024"
+ },
+ "CHARGES NOV": {
+  "category": "Bank charges",
+  "seen": 1,
+  "example": "Charges 29NOV A/C 41204042"
+ },
+ "OCT AOP LONDON GB": {
+  "category": "Professional - AOP",
+  "seen": 1,
+  "example": "Card Transaction 4163 23OCT25 AOP LONDON GB"
+ },
+ "NOV ADVENTURE BUDE LTD": {
+  "category": "Unknown",
+  "seen": 1,
+  "example": "Card Transaction 4163 29NOV25 C ADVENTURE BUDE LTD BUDE GB"
+ },
+ "HMRC PAYE PA": {
+  "category": "HMRC - maternity pay",
+  "seen": 2,
+  "example": "Automated Credit HMRC PAYE 475PA01701935"
+ },
+ "CORP TAX NAULD PA": {
+  "category": "HMRC-PAYE",
+  "seen": 2,
+  "example": "OnLine Transaction CORP TAX C/NAULD I 475PA01701935 VIA MOBILE - LVP F"
+ },
+ "CHARGES JAN": {
+  "category": "Bank charges",
+  "seen": 2,
+  "example": "Charges 03JAN A/C 41204042"
+ },
+ "HMRC SELF ASSESSME CEDB": {
+  "category": "HMRC-SA",
+  "seen": 1,
+  "example": "OnLine Transaction HMRC SELF ASSESSME CEDB7FDB5BB64D118D TPP ECOSPEND "
+ },
+ "CHIDO HOVE": {
+  "category": "Dividend",
+  "seen": 11,
+  "example": "OnLine Transaction CHIDO HOVE TRANSFER VIA MOBILE - PYMT FP 03/12/24 1"
+ },
+ "CHIDO HOVE EXPENSES OWING": {
+  "category": "Dividend",
+  "seen": 1,
+  "example": "OnLine Transaction CHIDO HOVE Expenses owing VIA MOBILE - LVP FP 27/01"
+ },
+ "CHARGES FEB": {
+  "category": "Bank charges",
+  "seen": 1,
+  "example": "Charges 28FEB A/C 41204042"
+ },
+ "LOCUMS LIMITED CHIDO ACCOUNTS": {
+  "category": "Accountancy",
+  "seen": 2,
+  "example": "OnLine Transaction LOCUMS LIMITED CHIDO ACCOUNTS VIA MOBILE - LVP FP 2"
+ },
+ "CHIDO HOVE INVEST": {
+  "category": "Dividend",
+  "seen": 2,
+  "example": "OnLine Transaction CHIDO HOVE INVEST VIA MOBILE - PYMT FP 12/05/25 10 "
+ },
+ "CHARGES APR": {
+  "category": "Bank charges",
+  "seen": 1,
+  "example": "Charges 04APR A/C 41204042"
+ },
+ "CHARGES MAY": {
+  "category": "Bank charges",
+  "seen": 2,
+  "example": "Charges 02MAY A/C 41204042"
+ },
+ "JUL BKG BOOKING COM": {
+  "category": "Hotel",
+  "seen": 1,
+  "example": "Card Transaction 4163 02JUL25 BKG*BOOKING.COM HOTEL (888)850-3958 GB"
+ },
+ "NOV TAMAR BRIDGE PLYMOUTH": {
+  "category": "Toll",
+  "seen": 3,
+  "example": "Card Transaction 4163 22NOV25 C TAMAR BRIDGE PLYMOUTH GB"
+ },
+ "CHARGES JUL": {
+  "category": "Bank charges",
+  "seen": 1,
+  "example": "Charges 04JUL A/C 41204042"
+ },
+ "CHARGES AUG": {
+  "category": "Bank charges",
+  "seen": 2,
+  "example": "Charges 01AUG A/C 41204042"
+ },
+ "COLLEGE OF OPT": {
+  "category": "Professional - College",
+  "seen": 14,
+  "example": "Direct Debit THE COLLEGE OF OPT DD001773"
+ },
+ "MAR WWW OPTICAL ORG": {
+  "category": "Professional Fee",
+  "seen": 1,
+  "example": "Card Transaction 4163 07MAR25 WWW.OPTICAL.ORG LONDON GB"
+ },
+ "SPECSAVERS FINANCE SPECSAVERS SEP": {
+  "category": "Income",
+  "seen": 1,
+  "example": "Automated Credit SPECSAVERS FINANCE SPECSAVERS SEP COM"
+ },
+ "CHARGES OCT": {
+  "category": "Bank charges",
+  "seen": 2,
+  "example": "Charges 03OCT A/C 41204042"
+ },
+ "BOOTS OPTICIANS PR": {
+  "category": "Income",
+  "seen": 1,
+  "example": "Automated Credit BOOTS OPTICIANS PR 1003 2000048049 K"
+ },
+ "NOV STFORMATIO NS CO": {
+  "category": "Subscription",
+  "seen": 1,
+  "example": "Card Transaction 4163 24NOV25 1STFORMATIO NS.CO.UK LONDON GB"
+ },
+ "SPECSAVERS FINANCE": {
+  "category": "Income",
+  "seen": 59,
+  "example": "SPECSAVERS FINANCE-600920-71021000"
+ },
+ "LOCUMS LIMITED QADI LTD": {
+  "category": "Accountancy",
+  "seen": 1,
+  "example": "Locums Limited Qadi Ltd 2025"
+ },
+ "GOGGLE BOX LTD LOCUM": {
+  "category": "Income",
+  "seen": 3,
+  "example": "GOGGLE BOX LTD LOCUM"
+ },
+ "ACCOUNT MAINTENANCE FEE": {
+  "category": "Bank charges",
+  "seen": 2,
+  "example": "Account Maintenance Fee"
+ },
+ "IBRAHIM": {
+  "category": "Dividends",
+  "seen": 42,
+  "example": "A M Ibrahim transfer"
+ },
+ "PURCHASE NCP LIMITED APPPAY": {
+  "category": "Parking",
+  "seen": 24,
+  "example": "Card Purchase NCP LIMITED AppPay"
+ },
+ "PURCHASE YOURPARKINGSPACE CO UK": {
+  "category": "Parking",
+  "seen": 18,
+  "example": "Card Purchase YOURPARKINGSPACE.CO.UK AppPay"
+ },
+ "PURCHASE MUFFIN BREAK ASHFORD": {
+  "category": "Lunch",
+  "seen": 9,
+  "example": "Card Purchase MUFFIN BREAK ASHFORD AppPay"
+ },
+ "GOGGLE BOX LTD AHMED": {
+  "category": "Income",
+  "seen": 5,
+  "example": "GOGGLE BOX LTD AHMED LOCUM"
+ },
+ "PURCHASE PERFECT CHICKEN APPPAY": {
+  "category": "Lunch",
+  "seen": 2,
+  "example": "Card Purchase PERFECT CHICKEN AppPay"
+ },
+ "PURCHASE GERMAN DONER KEBAB": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase GERMAN DONER KEBAB AppPay"
+ },
+ "PURCHASE NCP LIMITED": {
+  "category": "Parking",
+  "seen": 1,
+  "example": "Card Purchase NCP LIMITED"
+ },
+ "PURCHASE GREGGS APPPAY": {
+  "category": "Lunch",
+  "seen": 17,
+  "example": "Card Purchase GREGGS AppPay"
+ },
+ "PURCHASE CAFFE LUNA APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase CAFFE LUNA AppPay"
+ },
+ "PURCHASE SUBWAY APPPAY": {
+  "category": "Lunch",
+  "seen": 2,
+  "example": "Card Purchase SUBWAY AppPay"
+ },
+ "PURCHASE PINTADERA CAFE APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase PINTADERA CAFE AppPay"
+ },
+ "PURCHASE SYDENHAM SYDENHAM APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase SYDENHAM - 12 SYDENHAM AppPay"
+ },
+ "PURCHASE KWIK FIT APPPAY": {
+  "category": "DLA",
+  "seen": 1,
+  "example": "Card Purchase KWIK FIT AppPay"
+ },
+ "PURCHASE WATAN RESTAURANT APPPAY": {
+  "category": "Entertainment",
+  "seen": 1,
+  "example": "Card Purchase Watan Restaurant AppPay"
+ },
+ "PURCHASE BYBROOK INSIDE APPPAY": {
+  "category": "Equipment?",
+  "seen": 1,
+  "example": "Card Purchase BYBROOK INSIDE AppPay"
+ },
+ "HMRC CUMBERNAULD": {
+  "category": "HMRC SA",
+  "seen": 3,
+  "example": "HMRC Cumbernauld 4375411945A00109A"
+ },
+ "PURCHASE SAINSBURYS PETROL APPPAY": {
+  "category": "Petrol",
+  "seen": 8,
+  "example": "Card Purchase SAINSBURYS PETROL AppPay"
+ },
+ "HMRC CUMBERNAULD PK": {
+  "category": "HMRC PAYE",
+  "seen": 1,
+  "example": "HMRC Cumbernauld 120PK02422677"
+ },
+ "OPTICAL REVOLUTION CATFORD OPTICAL": {
+  "category": "Income",
+  "seen": 1,
+  "example": "OPTICAL REVOLUTION (CATFORD) optical revolution"
+ },
+ "SEGOR LIMITED OPTICAL REVOLUTION": {
+  "category": "Income",
+  "seen": 4,
+  "example": "SEGOR LIMITED Optical Revolution"
+ },
+ "PURCHASE SAINSBURY MKT APPPAY": {
+  "category": "Lunch",
+  "seen": 37,
+  "example": "Card Purchase SAINSBURY S S MKT AppPay"
+ },
+ "PURCHASE BP BLUE BOYS": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase BP-BLUE BOYS CONNECT AppPay"
+ },
+ "PURCHASE SUPERDRUG STORES PLC": {
+  "category": "Lunch",
+  "seen": 2,
+  "example": "Card Purchase SUPERDRUG STORES PLC AppPay"
+ },
+ "PURCHASE SAINSBURYS MKTS APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase SAINSBURYS S MKTS AppPay"
+ },
+ "PURCHASE SQ SERVESMITHS APPPAY": {
+  "category": "Lunch",
+  "seen": 3,
+  "example": "Card Purchase SQ SERVESMITHS AppPay"
+ },
+ "PURCHASE COSTA COFFEE WH": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase COSTA COFFEE@ WH SMITH AppPay"
+ },
+ "PURCHASE TFL TRAVEL CH": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Card Purchase TFL TRAVEL CH AppPay"
+ },
+ "PURCHASE MNK CATFORD EXPRESS": {
+  "category": "Lunch",
+  "seen": 2,
+  "example": "Card Purchase MNK Catford Express AppPay"
+ },
+ "PURCHASE TESCO STORES APPPAY": {
+  "category": "Lunch",
+  "seen": 10,
+  "example": "Card Purchase TESCO STORES 2253 AppPay"
+ },
+ "PURCHASE COSTA COFFEE APPPAY": {
+  "category": "Lunch",
+  "seen": 5,
+  "example": "Card Purchase COSTA COFFEE 43010618 AppPay"
+ },
+ "PURCHASE GREGGS PLC APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase GREGGS PLC AppPay"
+ },
+ "PURCHASE KING GROCERIES APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase THE KING GROCERIES AppPay"
+ },
+ "CHARGES": {
+  "category": "Bank charges",
+  "seen": 7,
+  "example": "Transaction Charges"
+ },
+ "PURCHASE SHELL MOTTINGHM APPPAY": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase SHELL MOTTINGHM090 AppPay"
+ },
+ "PURCHASE CO OP GROUP": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase CO-OP GROUP 070803 AppPay"
+ },
+ "PURCHASE SMART PARKING APPPAY": {
+  "category": "Parking",
+  "seen": 2,
+  "example": "Card Purchase Smart Parking (E) AppPay"
+ },
+ "PURCHASE BOOTS APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase BOOTS 1400 AppPay"
+ },
+ "PURCHASE RONTEC SWANLEY APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase RONTEC SWANLEY AppPay"
+ },
+ "PURCHASE AND ENTERPRISE APPPAY": {
+  "category": "Lunch",
+  "seen": 2,
+  "example": "Card Purchase K AND A ENTERPRISE AppPay"
+ },
+ "PURCHASE RINGGO PARKING APPPAY": {
+  "category": "Parking",
+  "seen": 4,
+  "example": "Card Purchase RINGGO PARKING AppPay"
+ },
+ "PURCHASE KEVIN NEWS APPPAY": {
+  "category": "Lunch",
+  "seen": 3,
+  "example": "Card Purchase KEVIN NEWS AppPay"
+ },
+ "PURCHASE MID SUSSEX DISTRICT": {
+  "category": "Parking",
+  "seen": 1,
+  "example": "Card Purchase Mid Sussex District AppPay"
+ },
+ "PURCHASE LONDON BOROUGH LEWISHA": {
+  "category": "Parking?",
+  "seen": 14,
+  "example": "Card Purchase London Borough Lewisha AppPay"
+ },
+ "PURCHASE CAFFE NERO TUNBRIDGE": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase CAFFE NERO TUNBRIDGE W AppPay"
+ },
+ "PURCHASE APPLEGREEN CAMBERWELL APPPAY": {
+  "category": "Petrol",
+  "seen": 2,
+  "example": "Card Purchase APPLEGREEN CAMBERWELL AppPay"
+ },
+ "PURCHASE BROMLEY RINGO ECOM": {
+  "category": "Parking",
+  "seen": 1,
+  "example": "Card Purchase BROMLEY RINGO ECOM AppPay"
+ },
+ "PURCHASE PAYBYPHONE ECOM APPPAY": {
+  "category": "Parking?",
+  "seen": 5,
+  "example": "Card Purchase PAYBYPHONE - ECOM AppPay"
+ },
+ "PURCHASE CAFFE NERO HAYWARDS": {
+  "category": "Lunch",
+  "seen": 12,
+  "example": "Card Purchase CAFFE NERO HAYWARDS HE AppPay"
+ },
+ "PURCHASE SUMUP PP STREATHAM": {
+  "category": "Parking?",
+  "seen": 1,
+  "example": "Card Purchase SumUp Pp Streatham AppPay"
+ },
+ "PURCHASE RONTEC CATFORD APPPAY": {
+  "category": "Petrol",
+  "seen": 58,
+  "example": "Card Purchase RONTEC CATFORD AppPay"
+ },
+ "PURCHASE PRET MANGER APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase PRET A MANGER AppPay"
+ },
+ "PURCHASE TESCO PFS APPPAY": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase TESCO PFS 3317 AppPay"
+ },
+ "SPECSAVERS FINANCE LOCUM INVOICES": {
+  "category": "Income",
+  "seen": 1,
+  "example": "SPECSAVERS FINANCE-600920-71021000 LOCUM INVOICES"
+ },
+ "PURCHASE PFS MFG FOREST": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase PFS @MFG FOREST HILL AppPay"
+ },
+ "PURCHASE WESTNORWOOD SERVICE ST": {
+  "category": "Petrol",
+  "seen": 4,
+  "example": "Card Purchase WESTNORWOOD SERVICE ST AppPay"
+ },
+ "PURCHASE KENNINGTON SERVICE STA": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase KENNINGTON SERVICE STA AppPay"
+ },
+ "PURCHASE SAINSBURYS MKTS": {
+  "category": "Petrol",
+  "seen": 4,
+  "example": "Card Purchase SAINSBURYS S MKTS"
+ },
+ "PURCHASE MFG VALE APPPAY": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase MFG THE VALE AppPay"
+ },
+ "PURCHASE CAFFE NERO STREATH": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase CAFFE NERO 451 STREATH AppPay"
+ },
+ "PURCHASE MFG EDEN PARK": {
+  "category": "Petrol",
+  "seen": 2,
+  "example": "Card Purchase MFG EDEN PARK AppPay"
+ },
+ "PURCHASE PARK KNIGHTS HILL": {
+  "category": "Petrol",
+  "seen": 10,
+  "example": "Card Purchase PARK KNIGHTS HILL SSTN AppPay"
+ },
+ "PURCHASE TESCO PAY AT": {
+  "category": "Petrol",
+  "seen": 2,
+  "example": "Card Purchase TESCO PAY AT PUMP 3317"
+ },
+ "PURCHASE ELITE GARAGES HAYWARDS": {
+  "category": "Petrol",
+  "seen": 8,
+  "example": "Card Purchase ELITE GARAGES HAYWARDS AppPay"
+ },
+ "PURCHASE SQ HAYWARDS HEATH": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase SQ HAYWARDS HEATH AppPay"
+ },
+ "PURCHASE COSTA APPPAY": {
+  "category": "Lunch",
+  "seen": 1,
+  "example": "Card Purchase COSTA AppPay"
+ },
+ "PURCHASE EG MOVE CAMBERW": {
+  "category": "Petrol",
+  "seen": 2,
+  "example": "Card Purchase EG ON THE MOVE CAMBERW AppPay"
+ },
+ "PURCHASE RONTEC CATFORD": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase RONTEC CATFORD"
+ },
+ "PURCHASE MOR MID SUSSEX": {
+  "category": "Parking",
+  "seen": 1,
+  "example": "Card Purchase MOR Mid Sussex Council AppPay"
+ },
+ "PURCHASE BP WIDMORE CONVENIENCE": {
+  "category": "Petrol",
+  "seen": 1,
+  "example": "Card Purchase BP WIDMORE CONVENIENCE AppPay"
+ },
+ "HMRC PAYE": {
+  "category": "SMP",
+  "seen": 2,
+  "example": "HMRC PAYE-201147-83192490"
+ },
+ "PURCHASE UBER PAYMENTS UK": {
+  "category": "Travel",
+  "seen": 1,
+  "example": "Card Purchase Uber Payments UK AppPay"
+ },
+ "PURCHASE UBER EATS PENDING": {
+  "category": "Trivial benefit",
+  "seen": 4,
+  "example": "Card Purchase UBER EATS PENDING AppPay"
+ },
+ "PURCHASE DELIVEROO APPPAY": {
+  "category": "Trivial benefit",
+  "seen": 1,
+  "example": "Card Purchase DELIVEROO AppPay"
+ },
+ "PURCHASE DHC WESTFIELD APPPAY": {
+  "category": "Trivial benefit",
+  "seen": 1,
+  "example": "Card Purchase DHC Westfield AppPay"
+ },
+ "IBRAHIM SALARY": {
+  "category": "Wages",
+  "seen": 12,
+  "example": "A M Ibrahim Salary"
+ },
+ "AMANI IBRAHIM": {
+  "category": "Wages-staff",
+  "seen": 12,
+  "example": "Amani Y Ibrahim Transfer"
+ },
+ "AMANI IBRAHIM SALARY": {
+  "category": "Wages-staff",
+  "seen": 1,
+  "example": "Amani Y Ibrahim Salary"
+ }
+}

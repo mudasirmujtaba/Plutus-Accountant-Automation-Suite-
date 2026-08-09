@@ -1,41 +1,55 @@
-"""Dynamic Excel writer for Milestone 1.
+"""Dynamic Excel writer — appends transactions to any client template while
+keeping the output identical in style to the input template.
 
-Works with any client template by reading column headers from the RAW sheet
-at runtime. Sheet names and column positions are auto-detected.
+Template preservation:
+ - New rows copy every cell's style (font, borders, fill, number format)
+   from the client's last existing data row.
+ - Formula columns are replicated from the template's own formulas
+   (row references translated), so NET / Balance UC / Check behave exactly
+   like the client's existing rows.
+ - Date cells match the template's type: text dates stay text in the same
+   format; real dates keep the template's number format.
+ - Year labels (SA / FY / ACC) are LEARNED from the client's existing rows
+   (see core/year_labels.py) — every client's fiscal-year convention is
+   reproduced, whatever it is.
+ - The Analysis sheet is updated in place (values only) instead of being
+   deleted and rebuilt, so its formatting survives.
 """
 
 import re
 import shutil
-from datetime import datetime
+from copy import copy
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
 from openpyxl.utils import get_column_letter
 
 from core.financial_year import get_fy
+from core.year_labels import YearLabeller, learn_year_columns
 
 
-# ── Sheet detection ───────────────────────────────────────────────────────────
+# ── Sheet / header helpers ────────────────────────────────────────────────────
 
 def _detect_sheet(wb: openpyxl.Workbook, keyword: str) -> str:
-    """Return first sheet name containing keyword (case-insensitive)."""
     kw = keyword.lower()
-    for name in wb.sheetnames:
-        if kw in name.lower():
-            return name
-    raise KeyError(f"No sheet containing '{keyword}' found in {wb.sheetnames}")
+    matches = [name for name in wb.sheetnames if kw in name.lower()]
+    if not matches:
+        raise KeyError(f"No sheet containing '{keyword}' found in {wb.sheetnames}")
+    if kw == 'raw':
+        # a sheet like 'Analysis 24 Raw (2)' is an analysis sheet, not the RAW tab
+        pure = [m for m in matches if 'analysis' not in m.lower()]
+        if pure:
+            return pure[0]
+    return matches[0]
 
-
-# ── Column index helpers ──────────────────────────────────────────────────────
 
 def _read_headers(ws) -> dict:
-    """Return {header_stripped_lower: 1-based_col_index} for the first row."""
     row1 = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
     return {str(v).strip().lower(): i + 1 for i, v in enumerate(row1) if v is not None}
 
 
 def _col(hdrs: dict, *names: str):
-    """Return 1-based col index for the first matching header name, or None."""
     for n in names:
         idx = hdrs.get(n.lower())
         if idx is not None:
@@ -43,118 +57,109 @@ def _col(hdrs: dict, *names: str):
     return None
 
 
-def _detect_year_col_format(ws, col_idx: int) -> str:
-    """Detect the format of a year column from existing data values.
-
-    Returns one of:
-      'sa_range'   "SA24/25"
-      'sa_dotted'  "SA23.24"
-      'sa_short'   "SA24"
-      'fy_label'   "FY24"
-      'acc_range'  "24/25"
-      'year_num'   "2025"
-    """
-    for row in ws.iter_rows(min_row=2, max_row=min(ws.max_row, 15), values_only=True):
-        val = row[col_idx - 1] if len(row) >= col_idx else None
-        if val:
-            s = str(val).strip()
-            if re.match(r'^SA\d{2}/\d{2}$', s):     return 'sa_range'
-            if re.match(r'^SA\d{2}\.\d{2}$', s):    return 'sa_dotted'
-            if re.match(r'^SA\d{2}$', s):            return 'sa_short'
-            if re.match(r'^FY\d{2}$', s, re.I):     return 'fy_label'
-            if re.match(r'^\d{2}/\d{2}$', s):       return 'acc_range'
-            if re.match(r'^\d{4}$', s):              return 'year_num'
-    return 'fy_label'  # default
+def _find_last_data_row(ws, key_cols: list) -> int:
+    """Last row where any key column (date/description/no) has a value."""
+    last = 1
+    for r in range(2, ws.max_row + 1):
+        for c in key_cols:
+            if c and ws.cell(r, c).value not in (None, ''):
+                last = r
+                break
+    return last
 
 
-def _format_year(sa: str, acc: str, fmt: str):
-    """Format a year value for a specific column format.
+# ── Date handling ─────────────────────────────────────────────────────────────
 
-    sa  = "FY25"  (start-year label from get_fy)
-    acc = "25/26" (year range from get_fy)
-    """
-    acc_start = acc[:2]   # "25"
-    acc_end   = acc[3:]   # "26"
-    if fmt == 'sa_range':   return f"SA{acc}"
-    if fmt == 'sa_dotted':  return f"SA{acc_start}.{acc_end}"
-    if fmt == 'sa_short':   return f"SA{acc_end}"
-    if fmt == 'fy_label':   return sa
-    if fmt == 'acc_range':  return acc
-    if fmt == 'year_num':   return int(f"20{acc_end}")
-    return sa  # fallback
+_DATE_FMTS = ('%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d', '%d %b %Y', '%d/%m/%y', '%m/%d/%Y')
 
 
-# ── Analysis rebuild ──────────────────────────────────────────────────────────
+def _detect_text_date_format(sample: str):
+    s = str(sample).strip()
+    for fmt in _DATE_FMTS:
+        try:
+            datetime.strptime(s, fmt)
+            return fmt
+        except ValueError:
+            continue
+    return None
 
-def _rebuild_analysis(
-    wb: openpyxl.Workbook,
-    raw_ws,
-    year_col: int,
-    net_col: int,
-    uc_col: int,
-    analysis_name: str,
-) -> None:
-    """Rebuild the Analysis sheet with SUMIFS formulas against the RAW sheet."""
-    raw_name     = raw_ws.title
-    year_letter  = get_column_letter(year_col)
-    net_letter   = get_column_letter(net_col)
-    uc_letter    = get_column_letter(uc_col)
 
-    # Collect unique year values (##/## range style OR FY## label style)
-    years: set = set()
-    for row in raw_ws.iter_rows(
-        min_row=2, max_row=raw_ws.max_row, min_col=year_col, max_col=year_col, values_only=True
-    ):
-        val = row[0]
-        if val:
-            s = str(val).strip()
-            if re.match(r'^\d{2}/\d{2}$', s) or re.match(r'^FY\d{2}$', s, re.I):
-                years.add(s)
-    acc_years = sorted(years)
+# ── Formula translation ───────────────────────────────────────────────────────
 
-    # Collect unique category values from UC Category column
-    cats: set = set()
-    for row in raw_ws.iter_rows(
-        min_row=2, max_row=raw_ws.max_row, min_col=uc_col, max_col=uc_col, values_only=True
-    ):
-        val = row[0]
-        if val and str(val).strip():
-            cats.add(str(val).strip())
+_CELL_REF = re.compile(r'(\$?)([A-Z]{1,3})(\$?)(\d+)')
 
-    ws_a = wb[analysis_name]
-    ws_a.delete_rows(1, ws_a.max_row)
 
-    n_years = len(acc_years)
+def _translate_formula(formula: str, src_row: int, dst_row: int) -> str:
+    """Shift relative row references near src_row to dst_row.
 
-    # Row 3: title
-    ws_a.cell(row=3, column=1, value='Sum of NET')
-    ws_a.cell(row=3, column=2, value='Column Labels')
+    Absolute row refs ($4) and far-away refs (headers etc.) are kept."""
+    delta = dst_row - src_row
 
-    # Row 4: headers
-    ws_a.cell(row=4, column=1, value='Row Labels')
-    for j, yr in enumerate(acc_years):
-        ws_a.cell(row=4, column=2 + j, value=yr)
+    def repl(m):
+        col_abs, col, row_abs, row_s = m.groups()
+        row = int(row_s)
+        if row_abs == '$':
+            return m.group()
+        if abs(row - src_row) <= 1:
+            return f'{col_abs}{col}{row_abs}{row + delta}'
+        return m.group()
 
-    # Rows 5+: one per category
-    for r_off, cat in enumerate(sorted(cats)):
-        r = 5 + r_off
-        ws_a.cell(row=r, column=1, value=cat)
-        for j, yr in enumerate(acc_years):
-            yr_ref = f"${get_column_letter(2 + j)}$4"
-            formula = (
-                f"=SUMIFS('{raw_name}'!${net_letter}:${net_letter},"
-                f"'{raw_name}'!${year_letter}:${year_letter},{yr_ref},"
-                f"'{raw_name}'!${uc_letter}:${uc_letter},$A{r})"
-            )
-            ws_a.cell(row=r, column=2 + j, value=formula)
+    return _CELL_REF.sub(repl, formula)
 
-    # Grand Total row
-    total_r = 5 + len(cats)
-    ws_a.cell(row=total_r, column=1, value='Grand Total')
-    for j in range(n_years):
-        col_letter = get_column_letter(2 + j)
-        ws_a.cell(row=total_r, column=2 + j,
-                  value=f"=SUM({col_letter}5:{col_letter}{total_r - 1})")
+
+# ── Client example extraction (teaches the AI this client's vocabulary) ──────
+
+def extract_client_examples(template_path, sheet_name: str = None) -> list:
+    """Return [{'description','type','reference','category'}] from the
+    template's existing rows — the accountant's own past decisions."""
+    wb = openpyxl.load_workbook(template_path, data_only=True)
+    try:
+        raw_name = sheet_name if (sheet_name and sheet_name in wb.sheetnames) \
+            else _detect_sheet(wb, 'raw')
+    except KeyError:
+        return []
+    ws = wb[raw_name]
+    hdrs = _read_headers(ws)
+
+    desc_col = _col(hdrs, 'Counter Party', 'Description', 'Transaction description',
+                    'Details', 'Memo', 'Narrative')
+    uc_col   = _col(hdrs, 'UC category', 'UC Category')
+    ref_col  = _col(hdrs, 'Reference', 'Ref')
+    type_col = _col(hdrs, 'Type', 'Transaction Type', 'Transaction type')
+
+    if not desc_col or not uc_col:
+        return []
+
+    examples = []
+    for r in range(2, ws.max_row + 1):
+        desc = ws.cell(r, desc_col).value
+        cat  = ws.cell(r, uc_col).value
+        if not desc or not cat:
+            continue
+        cat = str(cat).strip()
+        if not cat or cat.startswith('='):
+            continue
+        examples.append({
+            'description': str(desc).strip(),
+            'type':      str(ws.cell(r, type_col).value or '').strip() if type_col else '',
+            'reference': str(ws.cell(r, ref_col).value  or '').strip() if ref_col  else '',
+            'category':  cat,
+        })
+    return examples
+
+
+# ── Fallback year formatting (only when template has no existing rows) ───────
+
+def _fallback_year_label(d, style: str):
+    sa, acc = get_fy(d)          # sa='FY24' start-year, acc='24/25'
+    end = acc[3:]
+    if style == 'sa':
+        return f"SA{acc}"        # 'SA24/25'
+    if style == 'acc':
+        return acc               # '24/25'
+    if style == 'fy':
+        return f"FY{end}"        # END-year label: FY25 = year 2024/25
+    return None
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -166,10 +171,6 @@ def write_workbook(
     output_path,
     sheet_name: str = None,
 ) -> None:
-    """Append transactions to template and save to output_path.
-
-    sheet_name – RAW sheet to use; auto-detected if None.
-    """
     template_path = Path(template_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,21 +178,18 @@ def write_workbook(
     shutil.copy2(template_path, output_path)
     wb = openpyxl.load_workbook(output_path)
 
-    # ── Detect RAW sheet ──────────────────────────────────────────────────────
-    if sheet_name:
-        try:
-            ws = wb[sheet_name]
-        except KeyError:
-            ws = wb[_detect_sheet(wb, 'raw')]
+    # ── RAW sheet ─────────────────────────────────────────────────────────────
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
     else:
         ws = wb[_detect_sheet(wb, 'raw')]
 
-    # ── Build column index from template headers ───────────────────────────────
     hdrs = _read_headers(ws)
 
     no_col    = _col(hdrs, 'No', '#')
     sa_col    = _col(hdrs, 'SA')
     acc_col   = _col(hdrs, 'ACC', 'AC')
+    fy_col    = _col(hdrs, 'FY')
     date_col  = _col(hdrs, 'Date')
     desc_col  = _col(hdrs, 'Counter Party', 'Description', 'Transaction description',
                      'Details', 'Memo', 'Narrative')
@@ -206,122 +204,236 @@ def write_workbook(
     chk_col   = _col(hdrs, 'Check UC', 'Check')
     csv_cat_col = _col(hdrs, 'Spending Category', 'Category name')
     uc_col    = _col(hdrs, 'UC category', 'UC Category')
+    ts_col     = _col(hdrs, 'Timestamp')
+    from_col   = _col(hdrs, 'From')
+    to_col     = _col(hdrs, 'To')
+    status_col = _col(hdrs, 'Status')
+    tag_col    = _col(hdrs, 'Tag 1', 'Tag')
 
-    # Detect year column formats from existing data
-    sa_fmt  = _detect_year_col_format(ws, sa_col)  if sa_col  else None
-    acc_fmt = _detect_year_col_format(ws, acc_col) if acc_col else None
-    fy_col  = _col(hdrs, 'FY')
-    fy_fmt  = _detect_year_col_format(ws, fy_col)  if fy_col  else None
+    last_row = _find_last_data_row(ws, [date_col, desc_col, no_col])
 
-    # Determine NET formula target and signed-amount column
-    # When in_col and out_col exist: net formula is written to net_col or amt_col (as fallback)
-    # When only amt_col: no formula — write static signed value
-    if net_col and in_col and out_col:
-        net_formula_col = net_col
-        signed_col = amt_col if (amt_col and amt_col != net_col) else None
-    elif not net_col and amt_col and in_col and out_col:
-        net_formula_col = amt_col
-        signed_col = None
-    elif amt_col and not in_col and not out_col:
-        net_formula_col = None
-        signed_col = amt_col
-    else:
-        net_formula_col = None
-        signed_col = None
+    # ── Learn this client's year-label conventions from their own rows ───────
+    labellers = learn_year_columns(
+        ws, {'sa': sa_col, 'acc': acc_col, 'fy': fy_col}, date_col, last_row,
+    )
 
-    # ── Find last row and highest sequence number ─────────────────────────────
-    last_row = ws.max_row
+    # ── Template rows used as style/formula models for appended rows ─────────
+    model_row = last_row if last_row > 1 else None
+    max_col = ws.max_column
+
+    model_styles   = {}
+    model_formulas = {}   # col -> (formula, source_row)
+    date_text_fmt  = None
+    if model_row:
+        for c in range(1, max_col + 1):
+            cell = ws.cell(model_row, c)
+            model_styles[c] = copy(cell._style)
+        # Collect the most recent formula per column, scanning several rows up:
+        # some templates carry a formula only on the row-sign it applies to
+        # (e.g. IN = IF(H>0,H,"") appears only on income rows).
+        scan_from = max(2, model_row - 200)
+        for r_scan in range(model_row, scan_from - 1, -1):
+            for c in range(1, max_col + 1):
+                if c in model_formulas:
+                    continue
+                v = ws.cell(r_scan, c).value
+                if isinstance(v, str) and v.startswith('='):
+                    model_formulas[c] = (v, r_scan)
+        d_model = ws.cell(model_row, date_col).value if date_col else None
+        if isinstance(d_model, str):
+            date_text_fmt = _detect_text_date_format(d_model)
+
+    # Sign-conditional IN/OUT formulas: when BOTH sides carry a formula in the
+    # template, each appended row gets only the side matching its sign — the
+    # other cell stays empty, exactly like the client's own rows.
+    sign_conditional = (
+        in_col in model_formulas and out_col in model_formulas
+        and amt_col is not None
+    )
+
+    # ── Highest existing sequence number ──────────────────────────────────────
     last_no = 0
     if no_col:
-        for row in ws.iter_rows(
-            min_row=2, max_row=last_row, min_col=no_col, max_col=no_col, values_only=True
-        ):
-            val = row[0]
-            if val is not None:
-                try:
-                    last_no = max(last_no, int(val))
-                except (TypeError, ValueError):
-                    pass
+        for r in range(2, last_row + 1):
+            v = ws.cell(r, no_col).value
+            try:
+                last_no = max(last_no, int(v))
+            except (TypeError, ValueError):
+                pass
+
+    def year_label(kind: str, fallback_style: str, d):
+        lab: YearLabeller = labellers.get(kind)
+        if lab:
+            return lab.label_for(d)
+        return _fallback_year_label(d, fallback_style)
 
     # ── Write transaction rows ────────────────────────────────────────────────
-    def w(col, val):
-        if col:
-            ws.cell(row=r, column=col, value=val)
-
     for i, (txn, cat) in enumerate(zip(transactions, categories)):
         r = last_row + 1 + i
         seq = last_no + 1 + i
 
         d = txn['date']
-        if not isinstance(d, datetime):
-            d = datetime(d.year, d.month, d.day)
+        if isinstance(d, datetime):
+            d = d.date()
 
-        sa, acc = get_fy(d)
-        money_in  = txn['money_in']
-        money_out = txn['money_out']
+        money_in  = txn.get('money_in', 0.0)
+        money_out = txn.get('money_out', 0.0)
         balance   = txn.get('balance')
+        desc      = (txn.get('description') or '').strip() or (txn.get('subcategory') or '').strip()
 
-        w(no_col,   seq)
-        if sa_col  and sa_fmt:  w(sa_col,  _format_year(sa, acc, sa_fmt))
-        if acc_col and acc_fmt: w(acc_col, _format_year(sa, acc, acc_fmt))
-        if fy_col  and fy_fmt:  w(fy_col,  _format_year(sa, acc, fy_fmt))
-        w(date_col, d)
-        w(desc_col, txn.get('description') or None)
-        w(ref_col,  txn.get('reference')   or None)
-        w(type_col, txn.get('subcategory') or None)
+        # 1. apply the template's styles to the whole new row first
+        for c in range(1, max_col + 1):
+            if c in model_styles:
+                ws.cell(r, c)._style = copy(model_styles[c])
+
+        def w(col, val):
+            if col and val is not None and col not in model_formulas:
+                ws.cell(r, col, value=val)
+
+        # 2. data values
+        w(no_col, seq)
+        if sa_col:
+            w(sa_col, year_label('sa', 'sa', d))
+        if acc_col:
+            w(acc_col, year_label('acc', 'acc', d))
+        if fy_col:
+            w(fy_col, year_label('fy', 'fy', d))
+
+        if date_col and date_col not in model_formulas:
+            if date_text_fmt:
+                ws.cell(r, date_col, value=datetime(d.year, d.month, d.day).strftime(date_text_fmt))
+            else:
+                ws.cell(r, date_col, value=datetime(d.year, d.month, d.day))
+
+        w(desc_col, desc or None)
+        w(ref_col,  (txn.get('reference') or '').strip() or None)
+        w(type_col, (txn.get('subcategory') or '').strip() or None)
         w(in_col,   money_in  if money_in  > 0 else None)
         w(out_col,  money_out if money_out > 0 else None)
         w(bal_col,  balance)
-        w(csv_cat_col, txn.get('csv_category') or None)
+        w(csv_cat_col, (txn.get('csv_category') or '').strip() or None)
         w(uc_col,   cat)
+        w(ts_col,     txn.get('timestamp'))
+        w(from_col,   (txn.get('from')   or '').strip() or None)
+        w(to_col,     (txn.get('to')     or '').strip() or None)
+        w(status_col, (txn.get('status') or '').strip() or None)
+        w(tag_col,    (txn.get('tag')    or '').strip() or None)
 
-        # Signed amount column (e.g. Matthew Farris "Amount (GBP)")
-        if signed_col:
+        # signed amount column
+        if amt_col and amt_col not in model_formulas:
             signed = money_in if money_in > 0 else (-money_out if money_out > 0 else None)
-            w(signed_col, signed)
+            if signed is not None:
+                ws.cell(r, amt_col, value=signed)
 
-        # NET formula
-        if net_formula_col and in_col and out_col:
-            in_l  = get_column_letter(in_col)
-            out_l = get_column_letter(out_col)
-            w(net_formula_col, f'={in_l}{r}-{out_l}{r}')
+        # 3. replicate the template's own formulas (NET, Balance UC, Check, …)
+        for c, (f, src_row) in model_formulas.items():
+            if sign_conditional:
+                if c == in_col and money_in <= 0:
+                    continue    # leave IN empty on money-out rows
+                if c == out_col and money_out <= 0:
+                    continue    # leave OUT empty on money-in rows
+            ws.cell(r, c, value=_translate_formula(f, src_row, r))
 
-        # Balance UC formula chain
-        if buc_col and net_formula_col:
-            buc_l = get_column_letter(buc_col)
-            net_l = get_column_letter(net_formula_col)
-            if i == 0 and last_row > 1:
-                w(buc_col, f'={buc_l}{last_row}+{net_l}{r}')
-            elif i == 0:
-                w(buc_col, f'={net_l}{r}')
+        # 4. fallback formulas when the template rows carry static values
+        if net_col and net_col not in model_formulas and in_col and out_col:
+            in_l, out_l = get_column_letter(in_col), get_column_letter(out_col)
+            ws.cell(r, net_col, value=f'={in_l}{r}-{out_l}{r}')
+        if buc_col and buc_col not in model_formulas and net_col:
+            buc_l, net_l = get_column_letter(buc_col), get_column_letter(net_col)
+            if r - 1 >= 2:
+                ws.cell(r, buc_col, value=f'={buc_l}{r - 1}+{net_l}{r}')
             else:
-                w(buc_col, f'={buc_l}{r - 1}+{net_l}{r}')
+                ws.cell(r, buc_col, value=f'={net_l}{r}')
+        if chk_col and chk_col not in model_formulas and bal_col and buc_col and balance is not None:
+            bal_l, buc_l = get_column_letter(bal_col), get_column_letter(buc_col)
+            ws.cell(r, chk_col, value=f'={bal_l}{r}-{buc_l}{r}')
 
-        # Check UC formula (only when balance is present in the statement)
-        if chk_col and bal_col and buc_col and balance is not None:
-            bal_l = get_column_letter(bal_col)
-            buc_l = get_column_letter(buc_col)
-            w(chk_col, f'={bal_l}{r}-{buc_l}{r}')
+    new_last = last_row + len(transactions)
 
-    # ── Rebuild Analysis pivot ────────────────────────────────────────────────
+    # ── Update Analysis sheet in place ────────────────────────────────────────
     try:
         analysis_name = _detect_sheet(wb, 'analysis')
     except KeyError:
-        print("  [excel_writer] No Analysis sheet found — skipping pivot rebuild.")
-        wb.save(output_path)
-        print(f"  [excel_writer] Saved -> {output_path}")
-        return
+        analysis_name = None
 
-    # Choose year-grouping column for Analysis SUMIFS.
-    # Prefer the column that has range-style values (24/25) since it's most distinct,
-    # but any year column works — SUMIFS just matches whatever value is in the header cell.
-    pivot_year_col = acc_col or fy_col or sa_col
+    pivot_year_col = fy_col or acc_col or sa_col
+    net_source_col = net_col or amt_col
 
-    if not pivot_year_col or not net_formula_col or not uc_col:
-        print("  [excel_writer] Missing year/net/category columns — skipping Analysis rebuild.")
-    else:
-        print(f"  [excel_writer] Rebuilding {analysis_name} pivot...")
-        _rebuild_analysis(wb, ws, pivot_year_col, net_formula_col, uc_col, analysis_name)
+    if analysis_name and pivot_year_col and net_source_col and uc_col:
+        _update_analysis(wb[analysis_name], ws, pivot_year_col, net_source_col,
+                         uc_col, last_data_row=new_last)
+        print(f"  [excel_writer] Updated {analysis_name} in place.")
+    elif analysis_name:
+        print("  [excel_writer] Missing year/net/category columns — Analysis left untouched.")
 
     wb.save(output_path)
     print(f"  [excel_writer] Saved -> {output_path}")
+
+
+# ── Analysis update (values only — formatting preserved) ─────────────────────
+
+def _update_analysis(ws_a, raw_ws, year_col, net_col, uc_col, last_data_row) -> None:
+    raw_name    = raw_ws.title
+    year_letter = get_column_letter(year_col)
+    net_letter  = get_column_letter(net_col)
+    uc_letter   = get_column_letter(uc_col)
+
+    years_seen, cats = {}, []
+    for r in range(2, last_data_row + 1):
+        y = raw_ws.cell(r, year_col).value
+        c = raw_ws.cell(r, uc_col).value
+        if y is not None and str(y).strip() and not str(y).startswith('='):
+            years_seen.setdefault(str(y).strip(), y)   # keep original type (str/int)
+        if c is not None and str(c).strip() and not str(c).startswith('='):
+            cs = str(c).strip()
+            if cs not in cats:
+                cats.append(cs)
+    years = [years_seen[k] for k in sorted(years_seen)]
+    cats.sort(key=str.lower)
+
+    old_max_row = ws_a.max_row
+    old_max_col = ws_a.max_column
+
+    # style models taken from the existing populated area
+    hdr_style = copy(ws_a.cell(4, 2)._style)
+    cat_style = copy(ws_a.cell(5, 1)._style)
+    val_style = copy(ws_a.cell(5, 2)._style)
+
+    # clear old values but keep every cell's formatting
+    for r in range(1, old_max_row + 1):
+        for c in range(1, old_max_col + 1):
+            ws_a.cell(r, c).value = None
+
+    ws_a.cell(3, 1, 'Sum of NET')
+    ws_a.cell(3, 2, 'Column Labels')
+    ws_a.cell(4, 1, 'Row Labels')
+    for j, yr in enumerate(years):
+        cell = ws_a.cell(4, 2 + j)
+        cell.value = yr
+        cell._style = copy(hdr_style)
+
+    for k, cat in enumerate(cats):
+        r = 5 + k
+        cell = ws_a.cell(r, 1)
+        cell.value = cat
+        cell._style = copy(cat_style)
+        for j, yr in enumerate(years):
+            yr_ref = f"${get_column_letter(2 + j)}$4"
+            formula = (
+                f"=SUMIFS('{raw_name}'!${net_letter}:${net_letter},"
+                f"'{raw_name}'!${year_letter}:${year_letter},{yr_ref},"
+                f"'{raw_name}'!${uc_letter}:${uc_letter},$A{r})"
+            )
+            cell = ws_a.cell(r, 2 + j)
+            cell.value = formula
+            cell._style = copy(val_style)
+
+    total_r = 5 + len(cats)
+    cell = ws_a.cell(total_r, 1)
+    cell.value = 'Grand Total'
+    cell._style = copy(cat_style)
+    for j in range(len(years)):
+        col_letter = get_column_letter(2 + j)
+        cell = ws_a.cell(total_r, 2 + j)
+        cell.value = f"=SUM({col_letter}5:{col_letter}{total_r - 1})"
+        cell._style = copy(val_style)

@@ -69,7 +69,9 @@ def _run_pipeline(job_id: str, file_path: Path, original_name: str, template_pat
         _update(job, step='categorising', progress=40,
                 message=f'Parsed {n} transactions. Categorising with AI…')
         from core.categorise import categorise
-        categories = categorise(transactions)
+        from core.excel_writer import extract_client_examples
+        client_examples = extract_client_examples(template_path)
+        categories = categorise(transactions, client_examples=client_examples)
 
         _update(job, step='writing', progress=75, message='Categorised. Writing to Excel…')
         from core.excel_writer import write_workbook
